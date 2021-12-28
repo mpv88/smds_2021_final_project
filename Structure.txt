@@ -1,0 +1,30 @@
+https://www.governo.it/it/cscovid19/report-vaccini/
+https://github.com/italia/covid19-opendata-vaccini
+https://github.com/apalladi/datascienceprojects/tree/master/covid19 (modello SIR .ipynb)
+https://mine-cetinkaya-rundel.github.io/covid19-r/
+
+Period from [1st October 2020 to 1st February 2021] and prepare the following points:
+1)Perform some explanatory analysis for your data, especially by use of graphical tools.
+2)Describe the quality of the data and discuss whether and how a plausible statistical model could be posed.
+3)Build a model for your response variable Y. To this aim you can adopt any among the regression techniques covered during the course. Comment the estimates from the best model obtained.
+4)By building your model, evaluate inclusion of some covariates and their effect on the response variable. Possible covariates are: regional colors (yellow, orange, red), partial lockdown regime, region-specific laws & rules, etc.
+5)Check the model fit by using the proper tools, such as residuals plots.
+6)Provide 10-15 days-forward predictions and check their accuracy (say, for the period February 2nd to February 15, 2021).
+7)Compare alternative models in terms of predictive information criteria and comment.
+
+____________________________
+1)Introduction
+    a)Main aims
+    b)Methodology
+    c)Related works
+    d)Limitations of this work
+2)Data
+3)Model’s choice (n° of hospitalized people)->Poisson hierarchical regression (covariates: time, lockdown measures adopted by Government, number of medical swabs, regional membership)+%vaccinated people (0, 1, 2, 3 shots)
+4)Model estimates
+5)Graphical analysis and predictions
+6)Models for intensive care units (ICU)->Poisson hierarchical regression
+7)Predictive tables for ICU and hospitalized
+
+Model comparison via leave-one-out cross-validation.
+Out-of-sample predictions (95% credible intervals->Bayes)
+Predictions for the future medical swabs have been generated through local polynomial regression (LOESS).
