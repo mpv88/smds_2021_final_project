@@ -2,6 +2,11 @@ https://www.governo.it/it/cscovid19/report-vaccini/
 https://github.com/italia/covid19-opendata-vaccini
 https://github.com/apalladi/datascienceprojects/tree/master/covid19 (modello SIR .ipynb)
 https://mine-cetinkaya-rundel.github.io/covid19-r/
+https://statgroup-19.blogspot.com/2020/03/why-go-for-poisson-regression-and-not.html?m=0
+https://github.com/minmar94/StatGroup19-Covid19App/blob/master/User_Guide.pdf
+https://onlinelibrary.wiley.com/doi/10.1002/bimj.202000189
+https://github.com/ImperialCollegeLondon/covid19model
+https://www.proquest.com/docview/2528274421
 
 Period from [1st October 2020 to 1st February 2021] and prepare the following points:
 1)Perform some explanatory analysis for your data, especially by use of graphical tools.
@@ -12,6 +17,7 @@ Period from [1st October 2020 to 1st February 2021] and prepare the following po
 6)Provide 10-15 days-forward predictions and check their accuracy (say, for the period February 2nd to February 15, 2021).
 7)Compare alternative models in terms of predictive information criteria and comment.
 
+target 27/01/2022 (124 training, 14 testing)
 ____________________________
 1)Introduction
     a)Main aims
@@ -28,3 +34,19 @@ ____________________________
 Model comparison via leave-one-out cross-validation.
 Out-of-sample predictions (95% credible intervals->Bayes)
 Predictions for the future medical swabs have been generated through local polynomial regression (LOESS).
+______________________________
+#TODO:
+lag
+predictions
+______________________________
+#MAIN_TAKEAWAYS:
+# use Ctrl+Alt+R to write ordered code in sections
+# use stopifnot on each function beginning
+# use models <- purrr::map(by_country$data, country_lm) to apply model multiple time at once 
+# use "DataExplorer" for quick EDA (and then create ad-hoc graphs for more detailed features)
+# use pipes for all data wrangling
+# use "caret" for all model LM, GLM, GAM, Bayes (#TOSELF: learn tidymodels)
+# perform stepwise selection on LM (broom::glance(mod1) to evaluate different models)
+# use ANOVA with CHI/F test to evaluate nested models
+# estimate validation error
+# evaluate Mean squared error (MSE), Root mean squared error (RMSE), Mean absolute error (MAE) on OOS for all models
