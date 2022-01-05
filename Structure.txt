@@ -36,20 +36,20 @@ Out-of-sample predictions (95% credible intervals->Bayes)
 Predictions for the future medical swabs have been generated through local polynomial regression (LOESS).
 ______________________________
 #TODO:
-lag
-predictions
+ARIMA x 2 (evaluate best lags)
+Intercept of GLM in tidy?! if not possible use classical fit
 ______________________________
 #MAIN_TAKEAWAYS:
-# use Ctrl+Alt+R to write ordered code in sections
-# use stopifnot on each function beginning
-# use models <- purrr::map(by_country$data, country_lm) to apply model multiple time at once 
-# use "DataExplorer" for quick EDA (and then create ad-hoc graphs for more detailed features)
-# use pipes for all data wrangling
-# use "caret" for all model LM, GLM, GAM, Bayes (#TOSELF: learn tidymodels)
-# perform stepwise selection on LM (broom::glance(mod1) to evaluate different models)
-# use ANOVA with CHI/F test to evaluate nested models
-# estimate validation error
-# evaluate Mean squared error (MSE), Root mean squared error (RMSE), Mean absolute error (MAE) on OOS for all models
+# use Ctrl+Alt+R to write ordered code in sections DONE
+# use stopifnot on each function beginning NOT TODO
+# use models <- purrr::map(by_country$data, country_lm) to apply model multiple time at once NOT TODO 
+# use "DataExplorer" for quick EDA (and then create ad-hoc graphs for more detailed features) DONE
+# use pipes for all data wrangling DOING
+# use "caret" for all model LM, GLM, GAM, Bayes (#TOSELF: learn tidymodels) DOING
+# perform stepwise selection on LM (broom::glance(mod1) to evaluate different models) TODO
+# use ANOVA with CHI/F test to evaluate nested models TODO
+# estimate validation error DONE
+# evaluate Mean squared error (MSE), Root mean squared error (RMSE), Mean absolute error (MAE) on OOS for all models DONE
 ______________________________
 Ideas call 04/01/2021
 - differenziare ICU

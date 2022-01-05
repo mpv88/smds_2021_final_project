@@ -4,16 +4,17 @@
                   # GAM?, Bayes? etc..
 
 # A) LIBRARIES ----------------------------------------------------------------
-library(caret)
 library(DataExplorer)
 library(ggplot2)
+library(lubridate)
+library(modeltime)
 library(performance)
 library(PerformanceAnalytics)
 library(splines)
 library(tibble)
 library(tidymodels)
 library(tidyverse)
-library(vars)
+library(timetk)
 library(vip)
 
 # B) HELPER FUNCTIONS ---------------------------------------------------------
@@ -25,14 +26,14 @@ prediction_table <- function(fitted_model, input_data, is_tidy) {
               stats::predict(input_data) %>%
               dplyr::rename(pred = .pred) %>%
               dplyr::mutate(actual = input_data$ICU,
-                            pred_real = pred^2, # use if we decide to transform Y (see F.1)
-                            actual_real = actual^2)  # use if we decide to transform Y (see F.1)
+                            pred_real = pred, # use if we decide to transform Y (see F.1)
+                            actual_real = actual)  # use if we decide to transform Y (see F.1)
   } else {result <- fitted_model %>% 
                     stats::predict(input_data) %>%
                     tibble::as_tibble_col(column_name = "pred") %>%
                     dplyr::mutate(actual = input_data$ICU,
-                                  pred_real = pred^2, # use if we decide to transform Y (see F.1)
-                                  actual_real = actual^2) # use if we decide to transform Y (see F.1)
+                                  pred_real = pred, # use if we decide to transform Y (see F.1)
+                                  actual_real = actual) # use if we decide to transform Y (see F.1)
   }
 }
 
@@ -84,8 +85,7 @@ vaccini <- readr::read_csv("https://raw.githubusercontent.com/italia/covid19-ope
 # D) DATA WRANGLING -------------------------------------------------------
 regioni %>% dim()
 vaccini %>% dim()
-veneto_alldata %>% DataExplorer::introduce()
-veneto_alldata %>% DataExplorer::plot_intro()
+
 
 veneto_covid <- regioni %>%
                 dplyr::select(-c(stato, denominazione_regione, 
@@ -98,7 +98,8 @@ veneto_covid <- regioni %>%
                               swabs = tamponi,
                               total_cases = totale_casi,
                               deaths = deceduti,
-                              self_isolation = isolamento_domiciliare) %>%
+                              self_isolation = isolamento_domiciliare,
+                              positives_total = totale_positivi) %>%
                 dplyr::filter(codice_regione=="05")
 
 veneto_vaccini <- vaccini %>%                
@@ -116,14 +117,19 @@ veneto_vaccini <- vaccini %>%
 # merge all data & add residents
 veneto_alldata <- veneto_covid %>%
                   dplyr::left_join(veneto_vaccini, by=c("date"="date")) %>%
-                  dplyr::select(-c(codice_regione, codice_regione_ISTAT)) %>%
+                  #tibble::column_to_rownames("date") %>%
+                  dplyr::select(-c(codice_regione, codice_regione_ISTAT,
+                                   already_infected,shot_second,shot_first,
+                                   vaccinated_females, vaccinated_males, tamponi_test_antigenico_rapido,
+                                   tamponi_test_molecolare, totale_positivi_test_antigenico_rapido,
+                                   totale_positivi_test_molecolare, ingressi_terapia_intensiva,
+                                   casi_testati,casi_da_screening, casi_da_sospetto_diagnostico,
+                                   dimessi_guariti, variazione_totale_positivi, nuovi_positivi,
+                                   ricoverati_con_sintomi)) %>%
                   tibble::add_column(residents = 4879133) # pre-Covid residents at 01/01/2020
 
-
-#TODO: discuss is worth filtering on dates
-dplyr::filter(veneto_alldata, between(date, as.Date("2020-10-01"), as.Date("2021-02-01")))
-dplyr::filter(veneto_alldata, between(date, as.Date("2020-02-01"), as.Date("2021-02-15")))
-
+veneto_alldata %>% DataExplorer::introduce()
+veneto_alldata %>% DataExplorer::plot_intro()
 
 # E) EXPLORATORY DATA ANALYSIS (EDA) --------------------------------------
 
@@ -265,50 +271,78 @@ veneto_alldata %>% dplyr::mutate(transf = (ICU)^(1/3)) %>%
 #                            ordered = TRUE)
 
 # other useful columns-wise transformations to predictors
-veneto_alldata %>% differencing column here!!!!
+
+## F.3) Numerical transformations ------------------------------------------
+veneto_alldata <- veneto_alldata %>% 
+  dplyr::mutate(vaccinated_total = tidyr::replace_na(vaccinated_total, 0),
+                delta_ICU = ICU - dplyr::lag(ICU, n = 1L, default = 0),
+                days = dplyr::row_number())
 
 
-## F.3) Set up a train/test split -----------------------------------------
+## F.4) Set up a train/test split -----------------------------------------
 
 set.seed(25) # fix seed to make reproducible results
 
-split <- veneto_alldata %>% rsample::initial_split(prop = 0.8) # we can change % here
-train_data <- split %>% rsample::training()
-test_data <- split %>% rsample::testing()
+# on all series
+split <- veneto_alldata %>% rsample::initial_time_split(prop = 0.8, lag = 0) #TODO: change % here
+train_data <- split %>% rsample::training() #%>% tibble::rownames_to_column(var = "date")
+test_data <- split %>% rsample::testing() #%>% tibble::rownames_to_column(var = "date")
 
-train_data %>% dim() # check if is 80% of data points [1] 0.79941
-test_data %>% dim() # checks if is 20% of data points [1] 0.20059
+# required period
+train_data <- veneto_alldata %>%
+  dplyr::filter(dplyr::between(date, lubridate::as_date("2020-10-01"),lubridate::as_date("2021-02-01")))
+test_data <- veneto_alldata %>%
+  dplyr::filter(dplyr::between(date, lubridate::as_date("2021-02-02"),lubridate::as_date("2021-02-15")))
 
-## F.4) Set up k-fold(s) cross validation ----------------------------------
+train_data %>% dim() # check if is 80% of data points [1] 0.7988253
+test_data %>% dim() # checks if is 20% of data points [1] 0.2011747
 
-train_cv <- train_data %>% rsample::vfold_cv(v = 10, repeats = 2) # change k-folds here and repetitions
+## F.5) Set up k-fold(s) cross validation ----------------------------------
 
+train_cv <- train_data %>% rsample::loo_cv() # leave one out 
+#train_cv <- train_data %>% rsample::vfold_cv(v = 10, repeats = 2) # NOT FOR TS (k-folds + repetitions) cv
+train_cv <- train_data %>% rsample::sliding_index(lookback = 0L, # FOR TS ONLY
+                                                  assess_start = 1L,
+                                                  assess_stop = 1L,
+                                                  complete = TRUE,
+                                                  step = 1L,
+                                                  skip = 0L)
 
 # G) FEATURE ENGINEERING (separate transforms on train/test data) ----------
-# using recipe library to keep scalable steps
+# using recipe library see https://recipes.tidymodels.org/articles/Ordering.html
 
-recipe_lm <- recipes::recipe(ICU ~ swabs, data = train_data) %>%
+preditors_to_exclude <- c("date", "ICU", "residents", "deaths", "positives_total",
+                          "vaccinated_total")
+
+recipe_lm <- recipes::recipe(delta_ICU ~ days, data = train_data) %>%
+             recipes::step_mutate(days = row_number()) #%>%   
+             #recipes::step_select(ICU, days) %>%  #ERROR table predicts!!!
+             #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
+             #recipes::step_lag(swabs, lag = 1) %>% 
+             #recipes::step_ns(days, deg_free = 3)
              #recipes::step_rm(year, month, weekday) %>%
              #recipes::step_date(date) %>%
              #recipes::step_corr(all_numeric(), threshold = 0.8) %>%
-             #recipes::step_poly(all_predictors()) %>% 
-             #recipes::step_interact(~ all_predictors():all_predictors())
-             #recipes::step_ns(days, deg_free = tune::tune("days df")) %>% 
-             recipes::step_log(swabs, base = 10) %>% 
-             recipes::step_dummy(all_nominal_predictors())
+             #recipes::step_poly(all_predictors(), degree = 3)
+             #recipes::step_corr(all_predictors(), threshold = .90) %>%
+             #recipes::step_center(all_predictors()) %>%
+             #recipes::step_scale(all_predictors()) %>%
+             #recipes::step_ns(days, deg_free = tune::tune("days df")) %>%
+             #recipes::step_dummy(all_nominal_predictors())
+             #recipes::step_interact(~ all_predictors():all_predictors()) %>%           
+             #recipes::step_normalize(all_numeric())
+             #recipes::step_log(swabs, base = 10) %>% 
+
+             
+summary(recipe_lm)
+# apply recipe to train data & extract pre-processed train dataset to see it
+veneto_train_preprocessed <- recipe_lm %>%
+   prep(train_data) %>%
+   juice() %>% view()
+
 
 recipe_glm_pois <- recipes::recipe(ICU ~ swabs, case_weight = residents, data = train_data) %>%
                    recipes::step_log(swabs, base = 10)
-
-#add time as increment --> inserisci qui sopra come step
-cleaned_dataset_train$days <- seq(1, length(unique(cleaned_dataset_train$data)))
-
-
-
-#discover best lag
-best_lag <- VARselect(cleaned_dataset$terapia_intensiva)#find best lag for Y variable
-n <- best_lag$selection[1]
-#auto-regressive distributed lag (ADL) 
 
 
 # H) DATA MODELING ---------------------------------------------------------
@@ -353,7 +387,9 @@ lm_results %>% summary()
 generics::glance(lm_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit1 <- stats::lm(ICU ~ log10(swabs), data=train_data)
+fit1 <- stats::lm(delta_ICU ~ stats::poly(days, degree = 3), data = veneto_train_preprocessed)
+fit1 <- stats::lm(delta_ICU ~ splines::bs(days, df = 3), data=veneto_train_preprocessed)
+fit1 <- stats::lm(delta_ICU ~ splines::ns(days, df = 3), data=veneto_train_preprocessed)
 summary(fit1)
 
 ## H.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
@@ -378,9 +414,9 @@ glm_pois_results %>% summary()
 generics::glance(glm_pois_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit2.1 <- stats::glm(ICU ~ log10(swabs), data=train_data, family=poisson(link="log"), offset=log(residents))
+fit2.1 <- stats::glm(ICU ~ days, data = veneto_train_preprocessed, family=poisson(link="log"), offset=log(residents))
 summary(fit2.1) #residual deviance[168.17]>df[120] signals overdispersion!
-fit2.2 <- stats::glm(ICU/residents ~ log10(swabs), data=train_data, family=poisson(link="log"), weights=residents)
+fit2.2 <- stats::glm(ICU/residents ~ log10(swabs), data = veneto_train_preprocessed, family=poisson(link="log"), weights=residents)
 summary(fit2.2)
 an2 <- anova(fit2, test="Chisq") #check which covariates to keep
 
@@ -396,6 +432,14 @@ an3 <- anova(fit3, test="F")
 
 
 ## H.4) Model 4: ARIMA (1,1,1) ---------------------------------------------
+veneto_alldata %>% plot_time_series(date, ICU, .interactive = FALSE)
+
+#discover best lag
+best_lag <- VARselect(cleaned_dataset$terapia_intensiva)#find best lag for Y variable
+n <- best_lag$selection[1]
+#auto-regressive distributed lag (ADL) 
+
+
 ## H.5) Model 5: ARIMA with best lag and cross correlation best lags -------
 
 
