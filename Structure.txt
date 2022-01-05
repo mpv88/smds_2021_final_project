@@ -50,3 +50,9 @@ ______________________________
 # use ANOVA with CHI/F test to evaluate nested models
 # estimate validation error
 # evaluate Mean squared error (MSE), Root mean squared error (RMSE), Mean absolute error (MAE) on OOS for all models
+______________________________
+Ideas call 04/01/2021
+- differenziare ICU
+- esponenziale con portante negativa-> si può fare in R?
+- residui lm (poly^3)-> a bit of heteroskedasticity?...a reason to add predictors or to change modeling approach
+- problema del cutting temporale (modificare il periodo di fitting)

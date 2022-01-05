@@ -40,10 +40,10 @@ prediction_table <- function(fitted_model, input_data, is_tidy) {
 pull_metrics <- function(input_tibble) {
   metrics <- yardstick::metric_set(rmse, rsq, mae)
   
-  tranformed_result <- metrics(input_tibble, truth=actual, estimate=pred) %>%
+  tranformed_result <- yardstick::metrics(input_tibble, truth=actual, estimate=pred) %>%
     dplyr::pull(.estimate)
   
-  real_result <- metrics(input_tibble, truth=actual_real, estimate=pred_real) %>%
+  real_result <- yardstick::metrics(input_tibble, truth=actual_real, estimate=pred_real) %>%
     dplyr::pull(.estimate)
   
   exit <- cbind(transf_metrics = tranformed_result, real_metrics = real_result) %>%
@@ -53,6 +53,23 @@ pull_metrics <- function(input_tibble) {
 # 3.Save model coefficients for a fitted model object to re-apply to k-folds
 get_model <- function(x) {
   hardhat::extract_fit_parsnip(x) %>% generics::tidy()
+}
+
+# 4.Plot fitted model estimates vs. real-world data
+plot_fitted <- function(prediction_table) {
+  ggplot2::ggplot(prediction_table, ggplot2::aes(x = actual, y = pred)) + 
+  ggplot2::geom_abline(lty = 2) + 
+  ggplot2::geom_point(alpha = 0.5) + 
+  ggplot2::labs(x = "Official ICUs registered", y = "Predicted ICUs") +
+  tune::coord_obs_pred()
+}
+
+# 5.Plot residuals of fitted model
+plot_residuals <- function(model_results) {
+  graphics::par(mfrow = c(2,2))
+  plot1 <- model_results %>% plot(pch = 16, col = "#006EA1")
+  plot2 <- model_results %>% performance::check_model()
+  list(plot1, plot2)
 }
 
 # C) IMPORT RAW DATA ------------------------------------------------------
@@ -67,6 +84,8 @@ vaccini <- readr::read_csv("https://raw.githubusercontent.com/italia/covid19-ope
 # D) DATA WRANGLING -------------------------------------------------------
 regioni %>% dim()
 vaccini %>% dim()
+veneto_alldata %>% DataExplorer::introduce()
+veneto_alldata %>% DataExplorer::plot_intro()
 
 veneto_covid <- regioni %>%
                 dplyr::select(-c(stato, denominazione_regione, 
@@ -98,66 +117,138 @@ veneto_vaccini <- vaccini %>%
 veneto_alldata <- veneto_covid %>%
                   dplyr::left_join(veneto_vaccini, by=c("date"="date")) %>%
                   dplyr::select(-c(codice_regione, codice_regione_ISTAT)) %>%
-                  tibble::add_column(residents = 4879133) #pre-Covid residents at 01/01/2020
+                  tibble::add_column(residents = 4879133) # pre-Covid residents at 01/01/2020
 
 
 #TODO: discuss is worth filtering on dates
-dplyr::filter(cleaned_dataset, between(data, as.Date("2020-10-01"), as.Date("2021-02-01")))
-dplyr::filter(cleaned_dataset, between(data, as.Date("2020-02-01"), as.Date("2021-02-15")))
+dplyr::filter(veneto_alldata, between(date, as.Date("2020-10-01"), as.Date("2021-02-01")))
+dplyr::filter(veneto_alldata, between(date, as.Date("2020-02-01"), as.Date("2021-02-15")))
 
 
 # E) EXPLORATORY DATA ANALYSIS (EDA) --------------------------------------
-str(veneto_alldata) #discover data-types, see if R already sees some categorical columns as Factors
-length(unique(bike_all$holiday)) # check which columns are labeled as 'num' even if are categorical ('Factor')->convert them!
 
-summary(veneto_alldata) #descriptive stats for each column
+# 0.Visual dataset structure
+veneto_alldata %>% DataExplorer::plot_str() # tree based
+veneto_alldata %>% DataExplorer::plot_str(type = "r") # radial
+veneto_alldata %>% DataExplorer::introduce() # introductory data table
+veneto_alldata %>% DataExplorer::plot_intro() # introductory data plot
+veneto_alldata %>% DataExplorer::plot_missing() # visual missing data
+veneto_alldata %>% DataExplorer::profile_missing() # missing data profile for additional analysis
 
-# observe distribution of Y and some covariate candidates
-par(mfrow=c(1,3))
-hist(cleaned_dataset$terapia_intensiva, probability=TRUE, breaks=15)
-lines(density(car_price$price), col=4)
-hist(cleaned_dataset$totale_ospedalizzati, probability=TRUE, breaks=15)
-hist(cleaned_dataset$totale_casi, probability=TRUE, breaks=15)
+# 1.Data Inspection, a collection of methods
+veneto_alldata %>% structure() # peek at tibble details + head rows
+veneto_alldata %>% glimpse() # glimpse at all columns
+veneto_alldata %>% str() # discover data-types, is R already seeing cat cols as Factors?
+veneto_alldata %>% summary() # descriptive stats for each col
 
+# unique occurrences of each col, categorical data to be later converted to factors
+veneto_alldata %>%
+  dplyr::summarise(dplyr::across(tidyselect::everything(), n_distinct))
+
+# 2.Observing Y distribution
 # plot response variable vs time
-ggplot(cleaned_dataset, aes(x=data, y=terapia_intensiva))+
-  geom_point(aes(x=data, y=terapia_intensiva))+
+ggplot(veneto_alldata, aes(x = date, y=ICU))+
+  geom_point(aes(x=date, y = ICU))+
   labs(title="ICUs time evolution",
-       x="time (days)", y="intensive care units (ICUs")
+       x="time (days)", y = "intensive care units (ICUs)")
 
-# correlation matrix
-round(cor(cleaned_dataset), 4)
+# plot distribution, do we need rescaling?
+ggplot2::ggplot(veneto_alldata, ggplot2::aes(x = ICU)) + 
+  ggplot2::geom_histogram(bins = 50) 
+#+ scale_x_log10()
+#TODO: here you can try visually which is the best transform 
 
-# scatterplot matrix
-chart.Correlation(cleaned_dataset[,c("terapia_intensiva", "totale_ospedalizzati", "tamponi", "casi_testati")])
+# 3.Observe covariates distributions
 
-# F) DATA PREPARATION (all data) -------------------------------------------
+# FOR CATEGORICAL/DISCRETE VARIBLES
+veneto_alldata %>% DataExplorer::plot_bar() # bar-charts to get frequency distribution
+veneto_alldata %>% DataExplorer::plot_bar(with = "ICU") # bivariate frequency distribution of each discrete feature, by X or Y
+#TODO do we have categoricals or we want to add them?
+
+veneto_alldata %>% # visualize just discrete var correlations heatmap
+  stats::na.omit() %>% DataExplorer::plot_correlation(type = "d")
+
+veneto_alldata %>% # boxplots, distributions of some numerical X conditional on Y
+  dplyr::select(c("ICU", "hospitalized_total", "swabs", "deaths")) %>%
+  DataExplorer::plot_boxplot(by = "ICU")
+
+# FOR NUMERICAL/CONTINOUS VARIBLES
+n_obs <- 680L # n° obs we want to consider for analysis purposes
+
+veneto_alldata %>% DataExplorer::plot_histogram() # histograms with all X distributions 
+
+veneto_alldata %>% # qq-plot of selected X, on selected n° obs/rows
+  dplyr::select(c("ICU", "hospitalized_total", "swabs", "deaths")) %>% 
+  DataExplorer::plot_qq(sampled_rows = n_obs)
+
+veneto_alldata %>% # qq-plot of all vars conditioned on 1 variable (better if categorical)
+  dplyr::select(c("ICU", "residents")) %>% 
+  DataExplorer::plot_qq(by = "ICU", sampled_rows = n_obs)
+
+#TODO do we want to re-scale some vars? here you can try visually which is the best transform
+veneto_alldata %>% DataExplorer::update_columns(c("ICU", "swabs"), function(x) log(x)) %>%
+                   dplyr::select(c("ICU", "swabs")) %>% 
+                   DataExplorer::plot_qq(sampled_rows = n_obs) # for example here we log(ICU, swabs)
+
+veneto_alldata %>% DataExplorer::plot_density() # plot density distribution all vars
+
+veneto_alldata %>% # correlation matrix of selected variables
+  dplyr::select(c("ICU", "hospitalized_total", "swabs", "deaths")) %>% 
+  stats::cor() %>% round(digits = 4)
+
+veneto_alldata %>% # visualize var correlations heatmap
+  dplyr::select(c("ICU", "hospitalized_total", "swabs", "deaths")) %>%
+  stats::na.omit() %>% DataExplorer::plot_correlation(maxcat = 5L)
+
+veneto_alldata %>% # scatterplot matrix with distributions
+  dplyr::select(c("ICU", "hospitalized_total", "swabs", "deaths")) %>%
+  PerformanceAnalytics::chart.Correlation()
+
+veneto_alldata %>% # scatterplots of each single X vs Y
+  dplyr::select(c("ICU", "hospitalized_total", "swabs", "deaths")) %>%
+  DataExplorer::plot_scatterplot(by = "ICU", sampled_rows = n_obs)
+
+veneto_alldata %>% # perform/visualize PCA on selected features to reduce dimension of problem
+  dplyr::select(c("ICU", "hospitalized_total", "swabs", "deaths")) %>%
+  stats::na.omit() %>% DataExplorer::plot_prcomp(variance_cap = 0.9, nrow = 2L, ncol = 2L)
+
+
+# F) DATA PREPARATION (perform transform on all data) ----------------------
 
 ## F.1) Checking transforms ------------------------------------------------
-# we wish a normal response variable (ICUs) so we test which transform to use:
-# original response 
-PerformanceAnalytics::skewness(veneto_alldata$ICU) #[1] 0.9354436 positive skew
-PerformanceAnalytics::kurtosis(veneto_alldata$ICU) #[1] -0.4690721 (excess) platykurtic
+# if we wish a normal response (ICUs) we may want to test which transform is best:
+# original response
+veneto_alldata %>% dplyr::summarise(dplyr::across(ICU, mean)) #[1] 109
+veneto_alldata %>% dplyr::summarise(dplyr::across(ICU, sd)) #[1] 113
+veneto_alldata %>% dplyr::select(ICU) %>% PerformanceAnalytics::skewness() #[1] 0.9264596 positive skew
+veneto_alldata %>% dplyr::select(ICU) %>% PerformanceAnalytics::kurtosis() #[1] -0.4800243 (excess) platykurtic
 
 # try natural log
-PerformanceAnalytics::skewness(log(veneto_alldata$ICU)) #[1] Nan
-PerformanceAnalytics::kurtosis(log(veneto_alldata$ICU)) #[1] Nan
-
+veneto_alldata %>% dplyr::mutate(transf = log(ICU)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::skewness() #[1] Nan
+veneto_alldata %>% dplyr::mutate(transf = log(ICU)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::kurtosis() #[1] Nan
 # try log10
-PerformanceAnalytics::skewness(log10(veneto_alldata$ICU)) #[1] Nan
-PerformanceAnalytics::kurtosis(log10(veneto_alldata$ICU)) #[1] Nan
-
+veneto_alldata %>% dplyr::mutate(transf = log10(ICU)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::skewness() #[1] Nan
+veneto_alldata %>% dplyr::mutate(transf = log10(ICU)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::kurtosis() #[1] Nan
 # try log(1+x)
-PerformanceAnalytics::skewness(log1p(veneto_alldata$ICU)) #[1] -0.5695241
-PerformanceAnalytics::kurtosis(log1p(veneto_alldata$ICU)) #[1] -0.5856917
-
+veneto_alldata %>% dplyr::mutate(transf = log1p(ICU)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::skewness() #[1] -0.5764408
+veneto_alldata %>% dplyr::mutate(transf = log1p(ICU)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::kurtosis() #[1] -0.5802109
 # try square root
-PerformanceAnalytics::skewness(sqrt(veneto_alldata$ICU)) #[1] 0.3493079
-PerformanceAnalytics::kurtosis(sqrt(veneto_alldata$ICU)) #[1] -1.135296
-
+veneto_alldata %>% dplyr::mutate(transf = (ICU)^(1/2)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::skewness() #[1] 0.339607
+veneto_alldata %>% dplyr::mutate(transf = (ICU)^(1/2)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::kurtosis() #[1] -1.142681
 # try cubic root
-PerformanceAnalytics::skewness(veneto_alldata$ICU^(1/3)) #[1] 0.01831247
-PerformanceAnalytics::kurtosis(veneto_alldata$ICU^(1/3)) #[1] -1.070609
+veneto_alldata %>% dplyr::mutate(transf = (ICU)^(1/3)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::skewness() #[1] 0.009550655
+veneto_alldata %>% dplyr::mutate(transf = (ICU)^(1/3)) %>% 
+  dplyr::select(transf) %>% PerformanceAnalytics::kurtosis() #[1] -1.073347
+
 
 ## F.2) Categorical variables as factors ----------------------------------
 # categorical variables are converted to factors and ordered when needed
@@ -173,12 +264,8 @@ PerformanceAnalytics::kurtosis(veneto_alldata$ICU^(1/3)) #[1] -1.070609
 #                            labels = c("clear", "cloudy", "rainy", "heavy rain"),
 #                            ordered = TRUE)
 
-# transform predictors in log-scale and add
-cleaned_dataset$log_ICU<-log(cleaned_dataset$terapia_intensiva)
-cleaned_dataset$log_hospitalized<-log(cleaned_dataset$totale_ospedalizzati)
-cleaned_dataset$log_swabs<-log(cleaned_dataset$tamponi)
-
-
+# other useful columns-wise transformations to predictors
+veneto_alldata %>% differencing column here!!!!
 
 
 ## F.3) Set up a train/test split -----------------------------------------
@@ -192,12 +279,12 @@ test_data <- split %>% rsample::testing()
 train_data %>% dim() # check if is 80% of data points [1] 0.79941
 test_data %>% dim() # checks if is 20% of data points [1] 0.20059
 
-## F.4) Set up k-fold(s) cross validation ---------------------------------
+## F.4) Set up k-fold(s) cross validation ----------------------------------
 
 train_cv <- train_data %>% rsample::vfold_cv(v = 10, repeats = 2) # change k-folds here and repetitions
 
 
-# G) FEATURE ENGINEERING (separate train/test data) -----------------------
+# G) FEATURE ENGINEERING (separate transforms on train/test data) ----------
 # using recipe library to keep scalable steps
 
 recipe_lm <- recipes::recipe(ICU ~ swabs, data = train_data) %>%
@@ -209,6 +296,9 @@ recipe_lm <- recipes::recipe(ICU ~ swabs, data = train_data) %>%
              #recipes::step_ns(days, deg_free = tune::tune("days df")) %>% 
              recipes::step_log(swabs, base = 10) %>% 
              recipes::step_dummy(all_nominal_predictors())
+
+recipe_glm_pois <- recipes::recipe(ICU ~ swabs, case_weight = residents, data = train_data) %>%
+                   recipes::step_log(swabs, base = 10)
 
 #add time as increment --> inserisci qui sopra come step
 cleaned_dataset_train$days <- seq(1, length(unique(cleaned_dataset_train$data)))
@@ -239,7 +329,7 @@ lm_workflow <- workflows::workflow() %>%
 # optional: create a grid and tune spline params with cv
 # https://tune.tidymodels.org/articles/getting_started.html
 # https://stackoverflow.com/questions/65274224/tidymodels-tunable-models-involving-10-fold-cross-validation-using-the-function
-#recap which are the tuning params in recipe
+# recap which are the tuning params in recipe
 lm_param <- recipe_lm %>% 
             dials::parameters() %>% 
             recipes::update(`days df` = spline_degree())
@@ -263,19 +353,44 @@ lm_results %>% summary()
 generics::glance(lm_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit1 <- stats::lm(train_data$ICU ~ log10(train_data$swabs))
+fit1 <- stats::lm(ICU ~ log10(swabs), data=train_data)
 summary(fit1)
 
 ## H.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
+glm_pois_engine <- poissonreg::poisson_reg() %>% 
+                   parsnip::set_engine("glm", family=poisson(link="log")) %>%
+                   parsnip::set_mode("regression")
 
-fit2 <- glm(terapia_intensiva ~ ns(days, 3), data=cleaned_dataset, family=poisson(link="log"), offset=log(residenti))
-summary(fit2) #residual deviance[168.17]>df[120] signals overdispersion!
+glm_pois_workflow <- workflows::workflow() %>%
+                     #workflows::remove_variables() %>% 
+                     workflows::add_recipe(recipe_glm_pois) %>%
+                     workflows::add_model(glm_pois_engine)
+
+# fit just the best model 
+glm_pois_train_fit <- fit(glm_pois_workflow, train_data)
+
+# store results for evaluation
+glm_pois_results <- glm_pois_train_fit %>% 
+                    hardhat::extract_fit_engine()
+
+# quick peek at results
+glm_pois_results %>% summary()
+generics::glance(glm_pois_train_fit)
+
+# check if results are in line with tidymodels: OK!
+fit2.1 <- stats::glm(ICU ~ log10(swabs), data=train_data, family=poisson(link="log"), offset=log(residents))
+summary(fit2.1) #residual deviance[168.17]>df[120] signals overdispersion!
+fit2.2 <- stats::glm(ICU/residents ~ log10(swabs), data=train_data, family=poisson(link="log"), weights=residents)
+summary(fit2.2)
 an2 <- anova(fit2, test="Chisq") #check which covariates to keep
 
-predict2 <- predict(fit2, list(Days=seq(15,1)))
 
 ## H.3) Model 3: GLM Quasi-Poisson with intercept + cubic spline on time ----
-fit3 <- glm(terapia_intensiva ~ ns(days, 3), data=cleaned_dataset, family=quasipoisson(link="log"), offset=log(residenti))
+
+
+
+# check if results are in line with tidymodels: OK!
+fit3 <- stats::glm(train_data$ICU ~ ns(days, 3), data=cleaned_dataset, family=quasipoisson(link="log"), offset=log(residenti))
 summary(fit3)
 an3 <- anova(fit3, test="F")
 
@@ -316,20 +431,20 @@ lm_workflow %>%
   collect_metrics()
 
 # g) check predictors importance
-vip::vip(fit1) #TODO: fare un primo lm con tutti i predittori e le interazioni e poi scremo
-vip::vip(lm_results)
+vip::vip(lm_results) #TODO: fare un primo lm con tutti i predittori e le interazioni e poi scremo
 
-# h) plot model vs true data
-
+# h) plot estimates vs true data (best practice is to keep tranformed scale)
+plot_fitted(lm_test_res)
 
 # i) plot residuals
-lm_results %>% performance::check_model()
-graphics::par(mfrow = c(2,2))
-lm_results %>% plot(pch = 16,
-              col = '#006EA1')
+plot_residuals(lm_results)
 
 
 ## I.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
+
+
+predict2 <- predict(fit2, list(Days=seq(15,1)))
+
 
 # J) COMPARISONS & CONCLUSIONS -------------------------------------------
 rbind(base_train_rmse, base_test_rmse,
