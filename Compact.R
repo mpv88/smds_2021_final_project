@@ -283,9 +283,11 @@ veneto_alldata <- veneto_alldata %>%
 
 set.seed(25) # fix seed to make reproducible results
 
-# on all series
+# on required time series
 veneto_alldata <- veneto_alldata %>%
-  dplyr::filter(dplyr::between(date, lubridate::as_date("2020-10-01"),lubridate::as_date("2021-02-15")))
+  dplyr::filter(dplyr::between(date, lubridate::as_date("2020-10-01"), lubridate::as_date("2021-02-15"))) %>% 
+  dplyr::mutate(days = row_number())
+
 split <- veneto_alldata %>% rsample::initial_time_split(prop = 0.90, lag = 0) #TODO: change % here
 train_data <- split %>% rsample::training() #%>% tibble::rownames_to_column(var = "date")
 test_data <- split %>% rsample::testing() #%>% tibble::rownames_to_column(var = "date")
@@ -311,7 +313,7 @@ preditors_to_exclude <- c("date", "ICU", "residents", "deaths", "positives_total
                           "vaccinated_total")
 ## G.1) Recipes LM -------------------------------------------------------
 recipe_lm <- recipes::recipe(delta_ICU ~ days, data = train_data) %>%
-             recipes::step_mutate(days = row_number()) %>%   
+             #recipes::step_mutate(days = row_number()) %>%   
              #recipes::step_select(ICU, days) %>%  #ERROR table predicts!!!
              #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
              #recipes::step_lag(swabs, lag = 1) %>% 
@@ -338,8 +340,8 @@ veneto_train_preprocessed_lm <- recipe_lm %>%
 
 
 ## G.2) Recipes GLM -------------------------------------------------------
-recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, case_weight = residents, data = train_data) %>%
-                   recipes::step_mutate(days = row_number()) #%>%
+recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, case_weight = residents, data = train_data) #%>%
+                   #recipes::step_mutate(days = row_number()) %>%
                    #recipes::step_ns(days, deg_free = 3)
 
 summary(recipe_glm_pois)
@@ -555,8 +557,8 @@ lm_workflow %>%
 ## I.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
 
 # a) predict on train set
-glm_pois_train_res <- prediction_table(fit2.1, train_data, is_delta = FALSE)
-glm_pois_train_res <- stats::predict(fit2.1, train_data) #, type = "response") %>% tibble::as_tibble_col(column_name = "pred")
+glm_pois_train_res <- prediction_table(fit3, train_data, is_delta = FALSE)
+glm_pois_train_res <- stats::predict(fit3, train_data) #, type = "response") %>% tibble::as_tibble_col(column_name = "pred")
 plot_fitted(glm_pois_train_res)
 
 # b) get metrics on train set
@@ -572,8 +574,8 @@ glm_pois_validation_res <- glm_pois_workflow %>%
 tune::collect_metrics(glm_pois_validation_res, summarize = TRUE)
 
 # e) predict on test set
-glm_pois_test_res <- prediction_table(fit2.1, test_data, is_delta = FALSE)
-glm_pois_train_res <- stats::predict(fit2.1, test_data, type = "response")#%>% tibble::as_tibble_col(column_name = "pred")
+glm_pois_test_res <- prediction_table(fit3, test_data, is_delta = FALSE)
+glm_pois_train_res <- stats::predict(fit3, test_data, type = "response")#%>% tibble::as_tibble_col(column_name = "pred")
 plot(glm_pois_test_res)
 # f) get metrics on test set   
 pull_metrics(glm_pois_test_res) %>% print()
