@@ -14,26 +14,26 @@ library(splines)
 library(tibble)
 library(tidymodels)
 library(tidyverse)
-library(timetk)
+library(vars)
 library(vip)
 
 # B) HELPER FUNCTIONS ---------------------------------------------------------
 
 # 1.Generates prediction tables (true data & predictions)
-prediction_table <- function(fitted_model, input_data, is_tidy) {
-  if (is_tidy == TRUE) {
+prediction_table <- function(fitted_model, input_data, is_delta) {
+  if (is_delta == TRUE) {
     result <- fitted_model %>%
               stats::predict(input_data) %>%
               dplyr::rename(pred = .pred) %>%
-              dplyr::mutate(actual = input_data$ICU,
+              dplyr::mutate(actual = input_data$delta_ICU,
                             pred_real = pred, # use if we decide to transform Y (see F.1)
                             actual_real = actual)  # use if we decide to transform Y (see F.1)
   } else {result <- fitted_model %>% 
-                    stats::predict(input_data) %>%
+                    stats::predict(input_data) %>% # type = "response"
                     tibble::as_tibble_col(column_name = "pred") %>%
-                    dplyr::mutate(actual = input_data$ICU,
-                                  pred_real = pred, # use if we decide to transform Y (see F.1)
-                                  actual_real = actual) # use if we decide to transform Y (see F.1)
+                    dplyr::mutate(actual = log(input_data$ICU),
+                                  pred_real = exp(pred), # use if we decide to transform Y (see F.1)
+                                  actual_real = exp(actual)) # use if we decide to transform Y (see F.1)
   }
 }
 
@@ -60,7 +60,7 @@ get_model <- function(x) {
 plot_fitted <- function(prediction_table) {
   ggplot2::ggplot(prediction_table, ggplot2::aes(x = actual, y = pred)) + 
   ggplot2::geom_abline(lty = 2) + 
-  ggplot2::geom_point(alpha = 0.5) + 
+  ggplot2::geom_point(alpha = 0.5) +
   ggplot2::labs(x = "Official ICUs registered", y = "Predicted ICUs") +
   tune::coord_obs_pred()
 }
@@ -284,18 +284,14 @@ veneto_alldata <- veneto_alldata %>%
 set.seed(25) # fix seed to make reproducible results
 
 # on all series
-split <- veneto_alldata %>% rsample::initial_time_split(prop = 0.8, lag = 0) #TODO: change % here
+veneto_alldata <- veneto_alldata %>%
+  dplyr::filter(dplyr::between(date, lubridate::as_date("2020-10-01"),lubridate::as_date("2021-02-15")))
+split <- veneto_alldata %>% rsample::initial_time_split(prop = 0.90, lag = 0) #TODO: change % here
 train_data <- split %>% rsample::training() #%>% tibble::rownames_to_column(var = "date")
 test_data <- split %>% rsample::testing() #%>% tibble::rownames_to_column(var = "date")
 
-# required period
-train_data <- veneto_alldata %>%
-  dplyr::filter(dplyr::between(date, lubridate::as_date("2020-10-01"),lubridate::as_date("2021-02-01")))
-test_data <- veneto_alldata %>%
-  dplyr::filter(dplyr::between(date, lubridate::as_date("2021-02-02"),lubridate::as_date("2021-02-15")))
-
-train_data %>% dim() # check if is 80% of data points [1] 0.7988253
-test_data %>% dim() # checks if is 20% of data points [1] 0.2011747
+train_data %>% dim() # check if is 80% of data points [1] 0.8985507
+test_data %>% dim() # checks if is 20% of data points [1] 0.1014493
 
 ## F.5) Set up k-fold(s) cross validation ----------------------------------
 
@@ -313,14 +309,14 @@ train_cv <- train_data %>% rsample::sliding_index(lookback = 0L, # FOR TS ONLY
 
 preditors_to_exclude <- c("date", "ICU", "residents", "deaths", "positives_total",
                           "vaccinated_total")
-
+## G.1) Recipes LM -------------------------------------------------------
 recipe_lm <- recipes::recipe(delta_ICU ~ days, data = train_data) %>%
-             recipes::step_mutate(days = row_number()) #%>%   
+             recipes::step_mutate(days = row_number()) %>%   
              #recipes::step_select(ICU, days) %>%  #ERROR table predicts!!!
              #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
              #recipes::step_lag(swabs, lag = 1) %>% 
-             #recipes::step_ns(days, deg_free = 3)
-             #recipes::step_rm(year, month, weekday) %>%
+             recipes::step_ns(days, deg_free = 3)
+             #recipes::step_rm(preditors_to_exclude) %>%
              #recipes::step_date(date) %>%
              #recipes::step_corr(all_numeric(), threshold = 0.8) %>%
              #recipes::step_poly(all_predictors(), degree = 3)
@@ -330,19 +326,45 @@ recipe_lm <- recipes::recipe(delta_ICU ~ days, data = train_data) %>%
              #recipes::step_ns(days, deg_free = tune::tune("days df")) %>%
              #recipes::step_dummy(all_nominal_predictors())
              #recipes::step_interact(~ all_predictors():all_predictors()) %>%           
-             #recipes::step_normalize(all_numeric())
-             #recipes::step_log(swabs, base = 10) %>% 
+             #recipes::step_normalize(all_numeric()) %>%
+             #recipes::step_log(swabs, base = 10) %>%
+             #recipes::step_naomit(all_predictors())
 
-             
 summary(recipe_lm)
 # apply recipe to train data & extract pre-processed train dataset to see it
-veneto_train_preprocessed <- recipe_lm %>%
-   prep(train_data) %>%
-   juice() %>% view()
+veneto_train_preprocessed_lm <- recipe_lm %>%
+  recipes::prep(train_data) %>% 
+  recipes::juice() %>% view()
 
 
-recipe_glm_pois <- recipes::recipe(ICU ~ swabs, case_weight = residents, data = train_data) %>%
-                   recipes::step_log(swabs, base = 10)
+## G.2) Recipes GLM -------------------------------------------------------
+recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, case_weight = residents, data = train_data) %>%
+                   recipes::step_mutate(days = row_number()) #%>%
+                   #recipes::step_ns(days, deg_free = 3)
+
+summary(recipe_glm_pois)
+# apply recipe to train data & extract pre-processed train dataset to see it
+veneto_train_preprocessed_glm_pois <- recipe_glm_pois %>%
+  recipes::prep(train_data) %>% 
+  recipes::juice() %>% view()
+
+                
+## G.3) Recipes ARIMA -------------------------------------------------------
+recipe_arima <- recipes::recipe(ICU ~ date, data = train_data) %>%
+                recipes::step_select(date, ICU)
+
+summary(recipe_arima)
+# apply recipe to train data & extract pre-processed train dataset to see it
+veneto_train_preprocessed_arima <- recipe_arima %>%
+  recipes::prep(train_data) %>% 
+  recipes::juice() %>% view()
+
+# ts plot
+veneto_train_preprocessed_arima %>% plot_time_series(date, ICU, .interactive = FALSE)
+
+# transform tibble to ts 
+veneto_train_preprocessed_arima <- veneto_train_preprocessed_arima %>% 
+  tsibble::as_tsibble() %>% stats::as.ts()
 
 
 # H) DATA MODELING ---------------------------------------------------------
@@ -387,14 +409,15 @@ lm_results %>% summary()
 generics::glance(lm_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit1 <- stats::lm(delta_ICU ~ stats::poly(days, degree = 3), data = veneto_train_preprocessed)
-fit1 <- stats::lm(delta_ICU ~ splines::bs(days, df = 3), data=veneto_train_preprocessed)
-fit1 <- stats::lm(delta_ICU ~ splines::ns(days, df = 3), data=veneto_train_preprocessed)
+fit1 <- stats::lm(delta_ICU ~ stats::poly(days, degree = 3), data = veneto_train_preprocessed_lm)
+fit1 <- stats::lm(delta_ICU ~ splines::bs(days, df = 3), data=veneto_train_preprocessed_lm)
+fit1 <- stats::lm(delta_ICU ~ splines::ns(days, df = 3), data=veneto_train_preprocessed_lm)
 summary(fit1)
+
 
 ## H.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
 glm_pois_engine <- poissonreg::poisson_reg() %>% 
-                   parsnip::set_engine("glm", family=poisson(link="log")) %>%
+                   parsnip::set_engine("glm", family=stats::poisson(link="log")) %>% #, offset = log(residents)
                    parsnip::set_mode("regression")
 
 glm_pois_workflow <- workflows::workflow() %>%
@@ -406,41 +429,86 @@ glm_pois_workflow <- workflows::workflow() %>%
 glm_pois_train_fit <- fit(glm_pois_workflow, train_data)
 
 # store results for evaluation
-glm_pois_results <- glm_pois_train_fit %>% 
-                    hardhat::extract_fit_engine()
+glm_pois_results <- glm_pois_train_fit %>% hardhat::extract_fit_engine()
 
 # quick peek at results
 glm_pois_results %>% summary()
 generics::glance(glm_pois_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit2.1 <- stats::glm(ICU ~ days, data = veneto_train_preprocessed, family=poisson(link="log"), offset=log(residents))
-summary(fit2.1) #residual deviance[168.17]>df[120] signals overdispersion!
-fit2.2 <- stats::glm(ICU/residents ~ log10(swabs), data = veneto_train_preprocessed, family=poisson(link="log"), weights=residents)
+fit2.1 <- stats::glm(ICU ~ splines::ns(days, 3), data = veneto_train_preprocessed_glm_pois,
+                     family = stats::poisson(link = "log"), offset = log(residents))
+summary(fit2.1)
+fit2.2 <- stats::glm(ICU/residents ~ splines::ns(days, 3), data = veneto_train_preprocessed_glm_pois,
+                     family = stats::poisson(link = "log"), weights = residents)
 summary(fit2.2)
-an2 <- anova(fit2, test="Chisq") #check which covariates to keep
-
+anova2 <- anova(fit2.1, test="Chisq") # check which predictors to keep
+# residual deviance[168.17] > df[120] signals over-dispersion!
 
 ## H.3) Model 3: GLM Quasi-Poisson with intercept + cubic spline on time ----
 
 
 
 # check if results are in line with tidymodels: OK!
-fit3 <- stats::glm(train_data$ICU ~ ns(days, 3), data=cleaned_dataset, family=quasipoisson(link="log"), offset=log(residenti))
+fit3 <- stats::glm(ICU ~ ns(days, 3), data = veneto_train_preprocessed_glm_pois,
+                   family = stats::quasipoisson(link = "log"), offset = log(residents))
 summary(fit3)
 an3 <- anova(fit3, test="F")
 
 
-## H.4) Model 4: ARIMA (1,1,1) ---------------------------------------------
-veneto_alldata %>% plot_time_series(date, ICU, .interactive = FALSE)
+## H.4) Model 4: auto-ARIMA (1,2,2) -----------------------------------------
+arima_engine <- modeltime::arima_reg() %>% 
+  parsnip::set_engine("auto_arima") %>%
+  parsnip::set_mode("regression")
 
-#discover best lag
-best_lag <- VARselect(cleaned_dataset$terapia_intensiva)#find best lag for Y variable
-n <- best_lag$selection[1]
-#auto-regressive distributed lag (ADL) 
+arima_workflow <- workflows::workflow() %>%
+  #workflows::remove_variables() %>% 
+  workflows::add_recipe(recipe_arima) %>%
+  workflows::add_model(arima_engine)
+
+# fit just the best model 
+arima_train_fit <- fit(arima_workflow, train_data)
+
+# store results for evaluation
+arima_results <- arima_train_fit %>% hardhat::extract_fit_engine()
+
+# quick peek at results
+arima_results
 
 
 ## H.5) Model 5: ARIMA with best lag and cross correlation best lags -------
+# discover best lag for Y variable
+veneto_train_preprocessed_arima %>% diff() %>% stats::acf() # auto correlation to get q
+veneto_train_preprocessed_arima %>% diff() %>% stats::pacf() # partial auto correlation to get p
+
+best_lag <-  VARselect(diff(veneto_train_preprocessed_arima), lag.max = 10)
+n <- best_lag$selection[1] # best AR lag is 8 
+#auto-regressive distributed lag (ADL) 
+
+arima_engine2 <- modeltime::arima_reg(seasonal_period = "auto", # periodic nature of seasonality, default = "auto" 
+                                      non_seasonal_ar = 1, # p-order of NSAR terms
+                                      non_seasonal_differences = 1, # d-order of NS differencing 
+                                      non_seasonal_ma = 2, # q-order of NSMA terms
+                                      seasonal_ar = 0, # P-order of SAR terms
+                                      seasonal_differences = 0, # D-order of S differencing 
+                                      seasonal_ma = 0) %>% # Q-order of SMA terms
+                 parsnip::set_engine("arima") %>%
+                 parsnip::set_mode("regression")
+
+arima_workflow2 <- workflows::workflow() %>%
+  #workflows::remove_variables() %>% 
+  workflows::add_recipe(recipe_arima) %>%
+  workflows::add_model(arima_engine2)
+
+# fit just the best model (default ARIMA(0,0,0)
+arima_train_fit2 <- fit(arima_workflow2, train_data)
+
+# store results for evaluation
+arima_results2 <- arima_train_fit2 %>% 
+  hardhat::extract_fit_engine()
+
+# quick peek at results
+arima_results2
 
 
 # I) DATA PREDICTION & EVALUATION ---------------------------------------
@@ -449,45 +517,118 @@ n <- best_lag$selection[1]
 ## I.1) Model 1: LM with log-transforms ------------------------------------
 
 # a) predict on train set
-lm_train_res <- prediction_table(lm_train_fit, train_data, TRUE)
+lm_train_res <- prediction_table(lm_train_fit, train_data, is_delta = TRUE)
+lm_train_res1 <- stats::predict(lm_train_fit, new_data = train_data)
 
-# b) get metrics on train set
+# b) plot train results
+plot_residuals(lm_results)
+plot_fitted(lm_train_res)
+vip::vip(lm_results) #TODO: fare un primo lm con tutti i predittori e le interazioni e poi scremo
+
+# c) get metrics on train set
 pull_metrics(lm_train_res) %>% print()
 
-# c) predict on validation set
+# d) predict on validation set
 lm_validation_res <- lm_workflow %>%  
                      tune::fit_resamples(resamples = train_cv,
                      control = tune::control_resamples(extract = get_model),
                      metrics = yardstick::metric_set(rmse, rsq, mae))
 
-# d) get metrics on validation set (resampling-estimates average error over K folds x R repetitions)
+# e) get metrics on validation set
 tune::collect_metrics(lm_validation_res, summarize = TRUE)
 
-# e) predict on test set
-lm_test_res <- prediction_table(lm_train_fit, test_data, TRUE)
+# f) predict on test set
+lm_test_res <- prediction_table(lm_train_fit, test_data, is_delta = TRUE)
 
-# f) get metrics on test set   
+# g) plot train results (best practice is to keep transformed scale)
+plot_fitted(lm_test_res)
+
+# h) get metrics on test set   
 pull_metrics(lm_test_res) %>% print()
 
-# f.bis) alternative test error check via workflow
+# h.bis) alternative test error check via workflow
 lm_workflow %>% 
   last_fit(split = split) %>% 
   collect_metrics()
 
-# g) check predictors importance
-vip::vip(lm_results) #TODO: fare un primo lm con tutti i predittori e le interazioni e poi scremo
-
-# h) plot estimates vs true data (best practice is to keep tranformed scale)
-plot_fitted(lm_test_res)
-
-# i) plot residuals
-plot_residuals(lm_results)
-
 
 ## I.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
 
+# a) predict on train set
+glm_pois_train_res <- prediction_table(fit2.1, train_data, is_delta = FALSE)
+glm_pois_train_res <- stats::predict(fit2.1, train_data) #, type = "response") %>% tibble::as_tibble_col(column_name = "pred")
+plot_fitted(glm_pois_train_res)
 
-predict2 <- predict(fit2, list(Days=seq(15,1)))
+# b) get metrics on train set
+pull_metrics(glm_pois_train_res) %>% print()
+
+# c) predict on validation set
+glm_pois_validation_res <- glm_pois_workflow %>%  
+  tune::fit_resamples(resamples = train_cv,
+                      control = tune::control_resamples(extract = get_model),
+                      metrics = yardstick::metric_set(rmse, rsq, mae))
+
+# d) get metrics on validation set (resampling-estimates average error over K folds x R repetitions)
+tune::collect_metrics(glm_pois_validation_res, summarize = TRUE)
+
+# e) predict on test set
+glm_pois_test_res <- prediction_table(fit2.1, test_data, is_delta = FALSE)
+glm_pois_train_res <- stats::predict(fit2.1, test_data, type = "response")#%>% tibble::as_tibble_col(column_name = "pred")
+plot(glm_pois_test_res)
+# f) get metrics on test set   
+pull_metrics(glm_pois_test_res) %>% print()
+
+# f.bis) alternative test error check via workflow
+glm_pois_workflow %>% 
+  last_fit(split = split) %>% 
+  collect_metrics()
+
+# g) check predictors importance
+vip::vip(glm_pois_results)
+
+# h) plot estimates vs true data (best practice is to keep tranformed scale)
+plot_fitted(glm_pois_test_res)
+
+# i) plot residuals
+plot_residuals(glm_pois_results)
+
+
+## I.3) Model 3:ARIMA ----------------------------------------------------
+
+# a) predict on train set
+arima_train_res <- prediction_table(arima_train_fit, train_data, FALSE)
+
+# b) get metrics on train set
+pull_metrics(arima_train_res) %>% print()
+
+# c) predict on validation set
+arima_validation_res <- arima_workflow %>%  
+  tune::fit_resamples(resamples = train_cv,
+                      control = tune::control_resamples(extract = get_model),
+                      metrics = yardstick::metric_set(rmse, rsq, mae))
+
+# d) get metrics on validation set (re-sampling estimates average error over K folds x R repetitions)
+tune::collect_metrics(arima_validation_res, summarize = TRUE)
+
+# e) predict on test set
+arima_test_res <- prediction_table(arima_train_fit, test_data, FALSE)
+
+# f) get metrics on test set   
+pull_metrics(arima_test_res) %>% print()
+
+# f.bis) alternative test error check via workflow
+arima_workflow %>% 
+  last_fit(split = split) %>% 
+  collect_metrics()
+
+# g) check predictors importance
+vip::vip(arima_results) #TODO: fare un primo lm con tutti i predittori e le interazioni e poi scremo
+
+# h) plot estimates vs true data (best practice is to keep tranformed scale)
+plot_fitted(arima_test_res)
+
+# i) plot residuals
+plot_residuals(arima_results)
 
 
 # J) COMPARISONS & CONCLUSIONS -------------------------------------------
