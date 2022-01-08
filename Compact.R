@@ -19,7 +19,7 @@ library(vip)
 
 # B) HELPER FUNCTIONS ---------------------------------------------------------
 
-# 1.Generates prediction tables (true data & predictions)
+# 1.Generates prediction tables (true data & predictions for LM & GLM)
 prediction_table <- function(fitted_model, input_data, is_delta) {
   if (is_delta == TRUE) {
     result <- fitted_model %>%
@@ -37,7 +37,20 @@ prediction_table <- function(fitted_model, input_data, is_delta) {
   }
 }
 
-# 2.Extracts performance metrics from models
+# 2.Generates calibration tables (true data & predictions for ARIMAs)
+calibration_table <- function(fitted_model, input_data) {
+    result <- fitted_model %>%
+              modeltime::modeltime_calibrate(input_data) %>%
+              purrr::pluck(.,".calibration_data") %>% 
+              purrr::pluck(., 1) %>%
+              dplyr::mutate(.residuals = NULL,
+                            actual_real = .actual,
+                            pred_real = .prediction) %>% 
+              dplyr::rename(actual = .actual,
+                            pred = .prediction)
+ }
+
+# 3.Extracts performance metrics from models
 pull_metrics <- function(input_tibble) {
   metrics <- yardstick::metric_set(rmse, rsq, mae)
   
@@ -51,12 +64,12 @@ pull_metrics <- function(input_tibble) {
     as.data.frame() %>% magrittr::set_rownames(c("rmse", "rsq", "mae"))
 }
 
-# 3.Save model coefficients for a fitted model object to re-apply to k-folds
+# 4.Save model coefficients for a fitted model object to re-apply to k-folds
 get_model <- function(x) {
   hardhat::extract_fit_parsnip(x) %>% generics::tidy()
 }
 
-# 4.Plot fitted model estimates vs. real-world data
+# 5.Plot fitted model estimates vs. real-world data
 plot_fitted <- function(prediction_table) {
   ggplot2::ggplot(prediction_table, ggplot2::aes(x = actual, y = pred)) + 
   ggplot2::geom_abline(lty = 2) + 
@@ -65,7 +78,7 @@ plot_fitted <- function(prediction_table) {
   tune::coord_obs_pred()
 }
 
-# 5.Plot residuals of fitted model
+# 6.Plot residuals of fitted model
 plot_residuals <- function(model_results) {
   graphics::par(mfrow = c(2,2))
   plot1 <- model_results %>% plot(pch = 16, col = "#006EA1")
@@ -85,7 +98,6 @@ vaccini <- readr::read_csv("https://raw.githubusercontent.com/italia/covid19-ope
 # D) DATA WRANGLING -------------------------------------------------------
 regioni %>% dim()
 vaccini %>% dim()
-
 
 veneto_covid <- regioni %>%
                 dplyr::select(-c(stato, denominazione_regione, 
@@ -272,7 +284,7 @@ veneto_alldata %>% dplyr::mutate(transf = (ICU)^(1/3)) %>%
 
 # other useful columns-wise transformations to predictors
 
-## F.3) Numerical transformations ------------------------------------------
+## F.3) Numerical variables transformations ------------------------------------------
 veneto_alldata <- veneto_alldata %>% 
   dplyr::mutate(vaccinated_total = tidyr::replace_na(vaccinated_total, 0),
                 delta_ICU = ICU - dplyr::lag(ICU, n = 1L, default = 0),
@@ -297,7 +309,7 @@ test_data %>% dim() # checks if is 20% of data points [1] 0.1014493
 
 ## F.5) Set up k-fold(s) cross validation ----------------------------------
 
-train_cv <- train_data %>% rsample::loo_cv() # leave one out 
+train_cv <- train_data %>% rsample::loo_cv() # leave one out cv
 #train_cv <- train_data %>% rsample::vfold_cv(v = 10, repeats = 2) # NOT FOR TS (k-folds + repetitions) cv
 train_cv <- train_data %>% rsample::sliding_index(lookback = 0L, # FOR TS ONLY
                                                   assess_start = 1L,
@@ -362,9 +374,9 @@ veneto_train_preprocessed_arima <- recipe_arima %>%
   recipes::juice() %>% view()
 
 # ts plot
-veneto_train_preprocessed_arima %>% plot_time_series(date, ICU, .interactive = FALSE)
+veneto_train_preprocessed_arima %>% timetk::plot_time_series(date, ICU, .interactive = FALSE)
 
-# transform tibble to ts 
+# format transform tibble to ts 
 veneto_train_preprocessed_arima <- veneto_train_preprocessed_arima %>% 
   tsibble::as_tsibble() %>% stats::as.ts()
 
@@ -516,7 +528,7 @@ arima_results2
 # I) DATA PREDICTION & EVALUATION ---------------------------------------
 # here we valuate MAE/MSE/RMSE/R_2 on predictions for each model to choose best
 
-## I.1) Model 1: LM with log-transforms ------------------------------------
+## I.1) LM with time spline ---------------------------------------------
 
 # a) predict on train set
 lm_train_res <- prediction_table(lm_train_fit, train_data, is_delta = TRUE)
@@ -554,7 +566,7 @@ lm_workflow %>%
   collect_metrics()
 
 
-## I.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
+## I.2) GLM Poisson --------------------------------------------------------
 
 # a) predict on train set
 glm_pois_train_res <- prediction_table(fit3, train_data, is_delta = FALSE)
@@ -588,17 +600,17 @@ glm_pois_workflow %>%
 # g) check predictors importance
 vip::vip(glm_pois_results)
 
-# h) plot estimates vs true data (best practice is to keep tranformed scale)
+# h) plot estimates vs true data (best practice is to keep transformed scale)
 plot_fitted(glm_pois_test_res)
 
 # i) plot residuals
 plot_residuals(glm_pois_results)
 
 
-## I.3) Model 3:ARIMA ----------------------------------------------------
+## I.3) ARIMA ----------------------------------------------------
 
 # a) predict on train set
-arima_train_res <- prediction_table(arima_train_fit, train_data, FALSE)
+arima_train_res <- calibration_table(arima_train_fit, train_data)
 
 # b) get metrics on train set
 pull_metrics(arima_train_res) %>% print()
@@ -613,7 +625,8 @@ arima_validation_res <- arima_workflow %>%
 tune::collect_metrics(arima_validation_res, summarize = TRUE)
 
 # e) predict on test set
-arima_test_res <- prediction_table(arima_train_fit, test_data, FALSE)
+arima_test_res <- calibration_table(arima_train_fit, test_data)
+calibr_table <- modeltime_calibrate(arima_train_fit, train_data)
 
 # f) get metrics on test set   
 pull_metrics(arima_test_res) %>% print()
@@ -623,13 +636,10 @@ arima_workflow %>%
   last_fit(split = split) %>% 
   collect_metrics()
 
-# g) check predictors importance
-vip::vip(arima_results) #TODO: fare un primo lm con tutti i predittori e le interazioni e poi scremo
-
-# h) plot estimates vs true data (best practice is to keep tranformed scale)
+# g) plot estimates vs true data (best practice is to keep tranformed scale)
 plot_fitted(arima_test_res)
 
-# i) plot residuals
+# h) plot residuals
 plot_residuals(arima_results)
 
 
