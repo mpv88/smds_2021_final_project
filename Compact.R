@@ -7,6 +7,7 @@
 library(DataExplorer)
 library(ggplot2)
 library(lubridate)
+library(MASS)
 library(modeltime)
 library(performance)
 library(PerformanceAnalytics)
@@ -81,7 +82,9 @@ plot_fitted <- function(prediction_table) {
 # 6.Plot residuals of fitted model
 plot_residuals <- function(model_results) {
   graphics::par(mfrow = c(2,2))
+  tryCatch(
   plot1 <- model_results %>% plot(pch = 16, col = "#006EA1")
+  )
   plot2 <- model_results %>% performance::check_model()
   list(plot1, plot2)
 }
@@ -321,63 +324,80 @@ train_cv <- train_data %>% rsample::sliding_index(lookback = 0L, # FOR TS ONLY
 # G) FEATURE ENGINEERING (separate transforms on train/test data) ----------
 # using recipe library see https://recipes.tidymodels.org/articles/Ordering.html
 
-preditors_to_exclude <- c("date", "ICU", "residents", "deaths", "positives_total",
-                          "vaccinated_total")
+# preditors_to_exclude <- c("date", "ICU", "residents", "deaths", "hospitalized_total", 
+#                            "self_isolation", "positives_total", "total_cases", "swabs", "vaccinated_total")
+preditors_to_exclude <- c("hospitalized_total", "self_isolation")
+
+preditors_to_include <- c("hospitalized_total", "self_isolation", "positives_total",
+                          "total_cases", "swabs", "vaccinated_total")
 ## G.1) Recipes LM -------------------------------------------------------
-recipe_lm <- recipes::recipe(delta_ICU ~ days, data = train_data) %>%
+recipe_lm <- recipes::recipe(delta_ICU ~ days+hospitalized_total+self_isolation, data = split) %>%
              #recipes::step_mutate(days = row_number()) %>%   
              #recipes::step_select(ICU, days) %>%  #ERROR table predicts!!!
              #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
-             #recipes::step_lag(swabs, lag = 1) %>% 
-             recipes::step_ns(days, deg_free = 3)
-             #recipes::step_rm(preditors_to_exclude) %>%
+             #recipes::step_lag(hospitalized_total, self_isolation, lag = 1) %>% 
+             recipes::step_ns(days, deg_free = 3) %>% 
+             #recipes::step_rm("deaths") %>%
              #recipes::step_date(date) %>%
-             #recipes::step_corr(all_numeric(), threshold = 0.8) %>%
-             #recipes::step_poly(all_predictors(), degree = 3)
-             #recipes::step_corr(all_predictors(), threshold = .90) %>%
+             #recipes::step_poly(days, degree = 3)
+             #recipes::step_corr(all_numeric(), threshold = 0.80) %>%
              #recipes::step_center(all_predictors()) %>%
              #recipes::step_scale(all_predictors()) %>%
              #recipes::step_ns(days, deg_free = tune::tune("days df")) %>%
              #recipes::step_dummy(all_nominal_predictors())
-             #recipes::step_interact(~ all_predictors():all_predictors()) %>%           
+             recipes::step_interact(~ all_predictors():all_predictors())           
              #recipes::step_normalize(all_numeric()) %>%
              #recipes::step_log(swabs, base = 10) %>%
              #recipes::step_naomit(all_predictors())
 
 summary(recipe_lm)
-# apply recipe to train data & extract pre-processed train dataset to see it
+# apply recipe to train data & test data
 veneto_train_preprocessed_lm <- recipe_lm %>%
   recipes::prep(train_data) %>% 
   recipes::juice() %>% view()
 
+veneto_test_preprocessed_lm <- recipe_lm %>%
+  recipes::prep(test_data) %>% 
+  recipes::juice() %>% view()
 
 ## G.2) Recipes GLM -------------------------------------------------------
-recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, case_weight = residents, data = train_data) #%>%
+recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, case_weight = residents, data = split) #%>%
                    #recipes::step_mutate(days = row_number()) %>%
-                   #recipes::step_ns(days, deg_free = 3)
+                   recipes::step_ns(days, deg_free = 3)
 
 summary(recipe_glm_pois)
-# apply recipe to train data & extract pre-processed train dataset to see it
+# apply recipe to train data & test data
 veneto_train_preprocessed_glm_pois <- recipe_glm_pois %>%
   recipes::prep(train_data) %>% 
   recipes::juice() %>% view()
 
+veneto_test_preprocessed_glm_pois <- recipe_glm_pois %>%
+  recipes::prep(test_data) %>% 
+  recipes::juice() %>% view()
                 
 ## G.3) Recipes ARIMA -------------------------------------------------------
-recipe_arima <- recipes::recipe(ICU ~ date, data = train_data) %>%
+recipe_arima <- recipes::recipe(ICU ~ date, data = split) %>%
                 recipes::step_select(date, ICU)
 
 summary(recipe_arima)
-# apply recipe to train data & extract pre-processed train dataset to see it
+# apply recipe to train data & test data
 veneto_train_preprocessed_arima <- recipe_arima %>%
   recipes::prep(train_data) %>% 
   recipes::juice() %>% view()
 
+# apply recipe to train data & test data
+veneto_test_preprocessed_arima <- recipe_arima %>%
+  recipes::prep(test_data) %>% 
+  recipes::juice() %>% view()
+
 # ts plot
 veneto_train_preprocessed_arima %>% timetk::plot_time_series(date, ICU, .interactive = FALSE)
+veneto_test_preprocessed_arima %>% timetk::plot_time_series(date, ICU, .interactive = FALSE)
 
 # format transform tibble to ts 
 veneto_train_preprocessed_arima <- veneto_train_preprocessed_arima %>% 
+  tsibble::as_tsibble() %>% stats::as.ts()
+veneto_test_preprocessed_arima <- veneto_test_preprocessed_arima %>% 
   tsibble::as_tsibble() %>% stats::as.ts()
 
 
@@ -425,8 +445,10 @@ generics::glance(lm_train_fit)
 # check if results are in line with tidymodels: OK!
 fit1 <- stats::lm(delta_ICU ~ stats::poly(days, degree = 3), data = veneto_train_preprocessed_lm)
 fit1 <- stats::lm(delta_ICU ~ splines::bs(days, df = 3), data=veneto_train_preprocessed_lm)
-fit1 <- stats::lm(delta_ICU ~ splines::ns(days, df = 3), data=veneto_train_preprocessed_lm)
-summary(fit1)
+fit1 <- stats::lm(delta_ICU ~ days+lag_1_swabs+lag_1_positives_total+lag_1_hospitalized_total+lag_1_self_isolation, data=veneto_train_preprocessed_lm)
+summary(fit1) # check with tidy
+stats::extractAIC(fit1) # starting AIC + check tidy
+stepAIC(fit1, list(upper = ~ days+lag_1_swabs+lag_1_positives_total+lag_1_hospitalized_total+lag_1_self_isolation, lower = ~ 1), direction = "backward")
 
 
 ## H.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
@@ -494,18 +516,20 @@ arima_results
 # discover best lag for Y variable
 veneto_train_preprocessed_arima %>% diff() %>% stats::acf() # auto correlation to get q
 veneto_train_preprocessed_arima %>% diff() %>% stats::pacf() # partial auto correlation to get p
+veneto_train_preprocessed_arima %>% diff() %>% stats::Box.test(lag = 10, type = "Ljung-Box") # daily change is random, uncorrelated with previous days
+#veneto_train_preprocessed_arima %>% diff() %>% tseries::adf.test(alternative="stationary", k=0)
 
 best_lag <-  VARselect(diff(veneto_train_preprocessed_arima), lag.max = 10)
 n <- best_lag$selection[1] # best AR lag is 8 
 #auto-regressive distributed lag (ADL) 
 
 arima_engine2 <- modeltime::arima_reg(seasonal_period = "auto", # periodic nature of seasonality, default = "auto" 
-                                      non_seasonal_ar = 1, # p-order of NSAR terms
-                                      non_seasonal_differences = 1, # d-order of NS differencing 
-                                      non_seasonal_ma = 2, # q-order of NSMA terms
+                                      non_seasonal_ar = 0, # p-order of NSAR terms
+                                      non_seasonal_differences = 2, # d-order of NS differencing 
+                                      non_seasonal_ma = 1, # q-order of NSMA terms
                                       seasonal_ar = 0, # P-order of SAR terms
                                       seasonal_differences = 0, # D-order of S differencing 
-                                      seasonal_ma = 0) %>% # Q-order of SMA terms
+                                      seasonal_ma = 1) %>% # Q-order of SMA terms
                  parsnip::set_engine("arima") %>%
                  parsnip::set_mode("regression")
 
@@ -532,7 +556,6 @@ arima_results2
 
 # a) predict on train set
 lm_train_res <- prediction_table(lm_train_fit, train_data, is_delta = TRUE)
-lm_train_res1 <- stats::predict(lm_train_fit, new_data = train_data)
 
 # b) plot train results
 plot_residuals(lm_results)
@@ -545,7 +568,7 @@ pull_metrics(lm_train_res) %>% print()
 # d) predict on validation set
 lm_validation_res <- lm_workflow %>%  
                      tune::fit_resamples(resamples = train_cv,
-                     control = tune::control_resamples(extract = get_model),
+                     #control = tune::control_resamples(extract = get_model),
                      metrics = yardstick::metric_set(rmse, rsq, mae))
 
 # e) get metrics on validation set
@@ -636,11 +659,13 @@ arima_workflow %>%
   last_fit(split = split) %>% 
   collect_metrics()
 
-# g) plot estimates vs true data (best practice is to keep tranformed scale)
+# g) plot estimates vs true data (best practice is to keep transformed scale)
 plot_fitted(arima_test_res)
 
 # h) plot residuals
-plot_residuals(arima_results)
+fits <- auto.arima(veneto_train_preprocessed_arima)
+checkresiduals(fits)
+forecast::checkresiduals(arima_results$data$.residuals)
 
 
 # J) COMPARISONS & CONCLUSIONS -------------------------------------------
