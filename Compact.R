@@ -1,8 +1,8 @@
 # __CASE: COVID-19 - Veneto's ICUs__ ------------------------------------------
 # Authors: Renzo Testa, Lorenzo Cabriel, Mattia Pividori
-# Preliminary Notes: LM (with log-transform), GLM (Poisson, Quasi-Poisson with offset)
-                  # GAM?, Bayes? etc..
-
+# Preliminary Notes: LM (with transforms), GLM (Poisson & Quasi-Poisson with offset),
+#                       ARIMA etc..
+#
 # A) LIBRARIES ----------------------------------------------------------------
 library(DataExplorer)
 library(ggplot2)
@@ -393,7 +393,7 @@ veneto_test_preprocessed_lm <- recipe_lm %>%
 ## G.2) Recipes GLM -------------------------------------------------------
 recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, case_weight = residents, data = split) #%>%
                    #recipes::step_mutate(days = row_number()) %>%
-                   recipes::step_ns(days, deg_free = 3)
+                   #recipes::step_ns(days, deg_free = 3)
 
 summary(recipe_glm_pois)
 # apply recipe to train data & test data
@@ -504,7 +504,7 @@ generics::glance(glm_pois_train_fit)
 
 # check if results are in line with tidymodels: OK!
 fit2.1 <- stats::glm(ICU ~ splines::ns(days, 3), data = veneto_train_preprocessed_glm_pois,
-                     family = stats::poisson(link = "log"), offset = log(residents))
+                     family = stats::poisson(link = "log"))#, offset = log(residents))
 summary(fit2.1)
 fit2.2 <- stats::glm(ICU/residents ~ splines::ns(days, 3), data = veneto_train_preprocessed_glm_pois,
                      family = stats::poisson(link = "log"), weights = residents)
@@ -586,20 +586,21 @@ arima_results2
 
 
 # I) DATA PREDICTION & EVALUATION ---------------------------------------
-# here we valuate MAE/MSE/RMSE/R_2 on predictions for each model to choose best
+# here we valuate predictions for each model to choose the best
 
 ## I.1) LM with time spline ---------------------------------------------
 
 # a) predict on train set
-lm_train_res <- prediction_table(lm_train_fit, train_data, is_delta = TRUE)
+lm_train_res <- lm_train_fit %>% prediction_table(train_data, is_delta = TRUE)
 
 # b) plot train results
-plot_residuals(lm_results)
 plot_fitted(lm_train_res)
-vip::vip(lm_results) #TODO: fare un primo lm con tutti i predittori e le interazioni e poi scremo
+lm_train_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
+lm_results %>% vip::vip()
+lm_results %>% plot_residuals()
 
 # c) get metrics on train set
-pull_metrics(lm_train_res) %>% print()
+lm_train_res %>% pull_metrics() %>% print()
 
 # d) predict on validation set
 lm_validation_res <- lm_workflow %>%  
@@ -608,17 +609,20 @@ lm_validation_res <- lm_workflow %>%
                      metrics = yardstick::metric_set(rmse, rsq, mae))
 
 # e) get metrics on validation set
-tune::collect_metrics(lm_validation_res, summarize = TRUE)
+lm_validation_res %>% tune::collect_metrics(summarize = TRUE)
 
 # f) predict on test set
-lm_test_res <- prediction_table(lm_train_fit, test_data, is_delta = TRUE)
+lm_test_res <- lm_train_fit %>% prediction_table(test_data, is_delta = TRUE)
 
 # g) plot test results (best practice is to keep transformed scale)
-plot_fitted(lm_test_res)
-#plot prediction vs true nel tempo
+lm_test_res %>% plot_fitted()
+lm_test_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
+fit1 %>% forecast::forecast(newdata = veneto_test_preprocessed_lm %>%
+                                      mutate(across(everything(), .fns = ~replace_na(.,0))), # na_omit
+                            level = c(95)) %>% plot() #see table with confidence bands
 
 # h) get metrics on test set   
-pull_metrics(lm_test_res) %>% print()
+lm_test_res %>% pull_metrics() %>% print()
 
 # h.bis) alternative test error check via workflow
 lm_workflow %>% 
@@ -629,17 +633,19 @@ lm_workflow %>%
 ## I.2) GLM Poisson --------------------------------------------------------
 
 # a) predict on train set
-glm_pois_train_res <- prediction_table(fit3, train_data, is_delta = FALSE)
-glm_pois_train_res <- stats::predict(fit3, train_data) #, type = "response") %>% tibble::as_tibble_col(column_name = "pred")
-plot_fitted(glm_pois_train_res)
+glm_pois_train_res1 <- glm_pois_train_fit %>% prediction_table(train_data, is_delta = FALSE)
+glm_pois_train_res <- fit2.1 %>% prediction_table(train_data, is_delta = FALSE)
+glm_pois_train_fit %>% stats::predict(train_data)# type = "response"
+fit2.1 %>% stats::predict(train_data,  type = "response")
 
 # b) plot train results
-plot_residuals(glm_pois_results)
-plot_fitted(glm_pois_res)
-vip::vip(glm_pois_results)
+glm_pois_train_res %>% plot_fitted()
+glm_pois_train_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
+glm_pois_results %>% vip::vip()
+glm_pois_results %>% plot_residuals()
 
 # c) get metrics on train set
-pull_metrics(glm_pois_train_res) %>% print()
+glm_pois_train_res %>% pull_metrics() %>% print()
 
 # d) predict on validation set
 glm_pois_validation_res <- glm_pois_workflow %>%  
@@ -648,18 +654,19 @@ glm_pois_validation_res <- glm_pois_workflow %>%
                            metrics = yardstick::metric_set(rmse, rsq, mae))
 
 # e) get metrics on validation set
-tune::collect_metrics(glm_pois_validation_res, summarize = TRUE)
+glm_pois_validation_res %>% tune::collect_metrics(summarize = TRUE)
 
 # f) predict on test set
-glm_pois_test_res <- prediction_table(glm_pois_train_fit, test_data, is_delta = FALSE)
-glm_pois_train_res <- stats::predict(fit3, test_data, type = "response")#%>% tibble::as_tibble_col(column_name = "pred")
-plot(glm_pois_test_res)
+glm_pois_test_res1 <- glm_pois_train_fit %>% prediction_table(test_data, is_delta = FALSE)
+glm_pois_test_res <- fit2.1 %>% prediction_table(test_data, is_delta = FALSE)
 
 # g) plot test results (best practice is to keep transformed scale)
-plot_fitted(glm_pois_test_res)
+glm_pois_test_res %>% plot_fitted()
+glm_pois_test_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
+fit2.1 %>% forecast::forecast(h = 14, level = c(95)) %>% plot() #see table with confidence bands
 
 # h) get metrics on test set   
-pull_metrics(glm_pois_test_res) %>% print()
+glm_pois_test_res %>% pull_metrics() %>% print()
 
 # h.bis) alternative test error check via workflow
 glm_pois_workflow %>% 
@@ -670,15 +677,15 @@ glm_pois_workflow %>%
 ## I.3) ARIMA ----------------------------------------------------
 
 # a) predict on train set
-arima_train_res <- calibration_table(arima_train_fit, train_data)
+arima_train_res <- arima_train_fit %>% calibration_table(train_data)
 
 # b) plot train results
-plot_fitted(arima_train_res)
-plot_series(arima_train_res)
-forecast::checkresiduals(fit4) # forecast::checkresiduals(arima_results$data$.residuals)
+arima_train_res %>% plot_fitted()
+arima_train_res %>% plot_series()
+fit4 %>% forecast::checkresiduals() # also (arima_results$data$.residuals)
 
 # c) get metrics on train set
-pull_metrics(arima_train_res) %>% print()
+arima_train_res %>% pull_metrics() %>% print()
 
 # d) predict on validation set
 arima_validation_res <- arima_workflow %>%  
@@ -687,18 +694,18 @@ arima_validation_res <- arima_workflow %>%
                         metrics = yardstick::metric_set(rmse, rsq, mae))
 
 # e) get metrics on validation set
-tune::collect_metrics(arima_validation_res, summarize = TRUE)
+arima_validation_res %>% tune::collect_metrics(summarize = TRUE)
 
 # f) predict on test set
-arima_test_res <- calibration_table(arima_train_fit, test_data)
+arima_test_res <- arima_train_fit %>% calibration_table(test_data)
 
 # g) plot test results (best practice is to keep transformed scale)
-plot_fitted(arima_test_res)
-plot_series(arima_test_res)
-forecast::forecast(fit4, h = 14, level = c(95)) %>% plot() #see table with confidence bands
+arima_test_res %>% plot_fitted()
+arima_test_res %>% plot_series()
+fit4 %>% forecast::forecast(h = 14, level = c(95)) %>% plot() #see table with confidence bands
 
 # h) get metrics on test set   
-pull_metrics(arima_test_res) %>% print()
+arima_test_res %>% pull_metrics() %>% print()
 
 # h.bis) alternative test error check via workflow
 arima_workflow %>% 
