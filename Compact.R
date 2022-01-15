@@ -53,16 +53,18 @@ calibration_table <- function(fitted_model, input_data) {
 
 # 3.Extracts performance metrics from models
 pull_metrics <- function(input_tibble) {
-  metrics <- yardstick::metric_set(rmse, rsq, mae)
+  metrics <- yardstick::metric_set(yardstick::rmse, yardstick::rsq, yardstick::mae,
+                                   yardstick::mape, yardstick::mase, yardstick::smape)
   
-  tranformed_result <- yardstick::metrics(input_tibble, truth=actual, estimate=pred) %>%
-    dplyr::pull(.estimate)
+  tranformed_result <- metrics(input_tibble, truth = actual, estimate = pred) %>%
+                       dplyr::pull(.estimate)
   
-  real_result <- yardstick::metrics(input_tibble, truth=actual_real, estimate=pred_real) %>%
-    dplyr::pull(.estimate)
+  real_result <- metrics(input_tibble, truth = actual_real, estimate = pred_real) %>%
+                 dplyr::pull(.estimate)
   
   exit <- cbind(transf_metrics = tranformed_result, real_metrics = real_result) %>%
-    as.data.frame() %>% magrittr::set_rownames(c("rmse", "rsq", "mae"))
+          as.data.frame() %>% magrittr::set_rownames(c("rmse", "rsq", "mae", 
+                                                       "mape", "mase", "smape"))
 }
 
 # 4.Save model coefficients for a fitted model object to re-apply to k-folds
@@ -79,7 +81,35 @@ plot_fitted <- function(prediction_table) {
   tune::coord_obs_pred()
 }
 
-# 6.Plot residuals of fitted model
+# 6.Plot fitted estimates series vs. real-world series
+plot_series <- function(prediction_table) {
+  df <- prediction_table %>% dplyr::mutate(residuals_real = actual_real-pred_real)
+                             
+  df1 <- df %>% dplyr::select(date, actual_real, pred_real) %>%
+                tidyr::gather(key = "variable", value = "value", -date)
+     
+  p1 <- ggplot2::ggplot(df1, ggplot2::aes(x = date, y = value)) + 
+        ggplot2::geom_line(aes(color = variable, linetype = variable)) + 
+        ggplot2::scale_color_manual(values = c("darkred", "steelblue")) +
+        ggplot2::labs(x = NULL, y = "true vs. predicted ICUs") +
+        ggplot2::theme(legend.position = "top") 
+  
+  df2 <- df %>% dplyr::select(date, residuals_real) %>%
+                tidyr::gather(key = "variable", value = "value", -date)
+  
+  p2 <- ggplot2::ggplot(df2, ggplot2::aes(x = date, y = value)) + 
+        ggplot2::geom_bar(stat = "identity") + ggplot2::theme_minimal() + 
+        ggplot2::theme(axis.title.x = element_blank(),
+                       axis.text.x = element_text(angle=90)) +
+        ggplot2::labs(y = "residuals")
+  
+  gridExtra::grid.arrange(p1, p2, ncol = 1, heights = c(2, 1),
+                          top = grid::textGrob("ICUs series",
+                          gp = grid::gpar(fontsize=20,font=3)),
+                          bottom = grid::textGrob("time (days)"))
+}
+
+# 7.Plot residuals of fitted model
 plot_residuals <- function(model_results) {
   graphics::par(mfrow = c(2,2))
   tryCatch(
@@ -331,11 +361,11 @@ preditors_to_exclude <- c("hospitalized_total", "self_isolation")
 preditors_to_include <- c("hospitalized_total", "self_isolation", "positives_total",
                           "total_cases", "swabs", "vaccinated_total")
 ## G.1) Recipes LM -------------------------------------------------------
-recipe_lm <- recipes::recipe(delta_ICU ~ days+hospitalized_total+self_isolation, data = split) %>%
+recipe_lm <- recipes::recipe(delta_ICU ~ days+hospitalized_total+self_isolation+swabs, data = split) %>%
              #recipes::step_mutate(days = row_number()) %>%   
              #recipes::step_select(ICU, days) %>%  #ERROR table predicts!!!
              #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
-             #recipes::step_lag(hospitalized_total, self_isolation, lag = 1) %>% 
+             recipes::step_lag(swabs, hospitalized_total, self_isolation, lag = 1) %>% 
              recipes::step_ns(days, deg_free = 3) %>% 
              #recipes::step_rm("deaths") %>%
              #recipes::step_date(date) %>%
@@ -391,6 +421,7 @@ veneto_test_preprocessed_arima <- recipe_arima %>%
   recipes::juice() %>% view()
 
 # ts plot
+veneto_alldata %>% timetk::plot_time_series(date, ICU, .interactive = FALSE)
 veneto_train_preprocessed_arima %>% timetk::plot_time_series(date, ICU, .interactive = FALSE)
 veneto_test_preprocessed_arima %>% timetk::plot_time_series(date, ICU, .interactive = FALSE)
 
@@ -445,10 +476,10 @@ generics::glance(lm_train_fit)
 # check if results are in line with tidymodels: OK!
 fit1 <- stats::lm(delta_ICU ~ stats::poly(days, degree = 3), data = veneto_train_preprocessed_lm)
 fit1 <- stats::lm(delta_ICU ~ splines::bs(days, df = 3), data=veneto_train_preprocessed_lm)
-fit1 <- stats::lm(delta_ICU ~ days+lag_1_swabs+lag_1_positives_total+lag_1_hospitalized_total+lag_1_self_isolation, data=veneto_train_preprocessed_lm)
+fit1 <- stats::lm(delta_ICU ~ lag_1_swabs+lag_1_hospitalized_total+lag_1_self_isolation, data=veneto_train_preprocessed_lm)
 summary(fit1) # check with tidy
 stats::extractAIC(fit1) # starting AIC + check tidy
-stepAIC(fit1, list(upper = ~ days+lag_1_swabs+lag_1_positives_total+lag_1_hospitalized_total+lag_1_self_isolation, lower = ~ 1), direction = "backward")
+stepAIC(fit1, list(upper = ~ lag_1_swabs+lag_1_hospitalized_total+lag_1_self_isolation, lower = ~ 1), direction = "backward")
 
 
 ## H.2) Model 2: GLM Poisson with intercept + cubic spline on time ---------
@@ -511,9 +542,14 @@ arima_results <- arima_train_fit %>% hardhat::extract_fit_engine()
 # quick peek at results
 arima_results
 
+# check if results are in line with forecast: OK!
+fit4 <- forecast::auto.arima(veneto_train_preprocessed_arima, trace = TRUE)
+summary(fit4)
+
 
 ## H.5) Model 5: ARIMA with best lag and cross correlation best lags -------
 # discover best lag for Y variable
+veneto_train_preprocessed_arima %>% diff() %>% stats::decompose() %>% plot()
 veneto_train_preprocessed_arima %>% diff() %>% stats::acf() # auto correlation to get q
 veneto_train_preprocessed_arima %>% diff() %>% stats::pacf() # partial auto correlation to get p
 veneto_train_preprocessed_arima %>% diff() %>% stats::Box.test(lag = 10, type = "Ljung-Box") # daily change is random, uncorrelated with previous days
@@ -577,16 +613,17 @@ tune::collect_metrics(lm_validation_res, summarize = TRUE)
 # f) predict on test set
 lm_test_res <- prediction_table(lm_train_fit, test_data, is_delta = TRUE)
 
-# g) plot train results (best practice is to keep transformed scale)
+# g) plot test results (best practice is to keep transformed scale)
 plot_fitted(lm_test_res)
+#plot prediction vs true nel tempo
 
 # h) get metrics on test set   
 pull_metrics(lm_test_res) %>% print()
 
 # h.bis) alternative test error check via workflow
 lm_workflow %>% 
-  last_fit(split = split) %>% 
-  collect_metrics()
+  tune::last_fit(split = split) %>% 
+  tune::collect_metrics()
 
 
 ## I.2) GLM Poisson --------------------------------------------------------
@@ -596,38 +633,38 @@ glm_pois_train_res <- prediction_table(fit3, train_data, is_delta = FALSE)
 glm_pois_train_res <- stats::predict(fit3, train_data) #, type = "response") %>% tibble::as_tibble_col(column_name = "pred")
 plot_fitted(glm_pois_train_res)
 
-# b) get metrics on train set
-pull_metrics(glm_pois_train_res) %>% print()
-
-# c) predict on validation set
-glm_pois_validation_res <- glm_pois_workflow %>%  
-  tune::fit_resamples(resamples = train_cv,
-                      control = tune::control_resamples(extract = get_model),
-                      metrics = yardstick::metric_set(rmse, rsq, mae))
-
-# d) get metrics on validation set (resampling-estimates average error over K folds x R repetitions)
-tune::collect_metrics(glm_pois_validation_res, summarize = TRUE)
-
-# e) predict on test set
-glm_pois_test_res <- prediction_table(fit3, test_data, is_delta = FALSE)
-glm_pois_train_res <- stats::predict(fit3, test_data, type = "response")#%>% tibble::as_tibble_col(column_name = "pred")
-plot(glm_pois_test_res)
-# f) get metrics on test set   
-pull_metrics(glm_pois_test_res) %>% print()
-
-# f.bis) alternative test error check via workflow
-glm_pois_workflow %>% 
-  last_fit(split = split) %>% 
-  collect_metrics()
-
-# g) check predictors importance
+# b) plot train results
+plot_residuals(glm_pois_results)
+plot_fitted(glm_pois_res)
 vip::vip(glm_pois_results)
 
-# h) plot estimates vs true data (best practice is to keep transformed scale)
+# c) get metrics on train set
+pull_metrics(glm_pois_train_res) %>% print()
+
+# d) predict on validation set
+glm_pois_validation_res <- glm_pois_workflow %>%  
+                           tune::fit_resamples(resamples = train_cv,
+                           #control = tune::control_resamples(extract = get_model),
+                           metrics = yardstick::metric_set(rmse, rsq, mae))
+
+# e) get metrics on validation set
+tune::collect_metrics(glm_pois_validation_res, summarize = TRUE)
+
+# f) predict on test set
+glm_pois_test_res <- prediction_table(glm_pois_train_fit, test_data, is_delta = FALSE)
+glm_pois_train_res <- stats::predict(fit3, test_data, type = "response")#%>% tibble::as_tibble_col(column_name = "pred")
+plot(glm_pois_test_res)
+
+# g) plot test results (best practice is to keep transformed scale)
 plot_fitted(glm_pois_test_res)
 
-# i) plot residuals
-plot_residuals(glm_pois_results)
+# h) get metrics on test set   
+pull_metrics(glm_pois_test_res) %>% print()
+
+# h.bis) alternative test error check via workflow
+glm_pois_workflow %>% 
+  tune::last_fit(split = split) %>% 
+  tune::collect_metrics()
 
 
 ## I.3) ARIMA ----------------------------------------------------
@@ -635,37 +672,38 @@ plot_residuals(glm_pois_results)
 # a) predict on train set
 arima_train_res <- calibration_table(arima_train_fit, train_data)
 
-# b) get metrics on train set
+# b) plot train results
+plot_fitted(arima_train_res)
+plot_series(arima_train_res)
+forecast::checkresiduals(fit4) # forecast::checkresiduals(arima_results$data$.residuals)
+
+# c) get metrics on train set
 pull_metrics(arima_train_res) %>% print()
 
-# c) predict on validation set
+# d) predict on validation set
 arima_validation_res <- arima_workflow %>%  
-  tune::fit_resamples(resamples = train_cv,
-                      control = tune::control_resamples(extract = get_model),
-                      metrics = yardstick::metric_set(rmse, rsq, mae))
+                        tune::fit_resamples(resamples = train_cv,
+                        #control = tune::control_resamples(extract = get_model),
+                        metrics = yardstick::metric_set(rmse, rsq, mae))
 
-# d) get metrics on validation set (re-sampling estimates average error over K folds x R repetitions)
+# e) get metrics on validation set
 tune::collect_metrics(arima_validation_res, summarize = TRUE)
 
-# e) predict on test set
+# f) predict on test set
 arima_test_res <- calibration_table(arima_train_fit, test_data)
-calibr_table <- modeltime_calibrate(arima_train_fit, train_data)
 
-# f) get metrics on test set   
+# g) plot test results (best practice is to keep transformed scale)
+plot_fitted(arima_test_res)
+plot_series(arima_test_res)
+forecast::forecast(fit4, h = 14, level = c(95)) %>% plot() #see table with confidence bands
+
+# h) get metrics on test set   
 pull_metrics(arima_test_res) %>% print()
 
-# f.bis) alternative test error check via workflow
+# h.bis) alternative test error check via workflow
 arima_workflow %>% 
-  last_fit(split = split) %>% 
-  collect_metrics()
-
-# g) plot estimates vs true data (best practice is to keep transformed scale)
-plot_fitted(arima_test_res)
-
-# h) plot residuals
-fits <- auto.arima(veneto_train_preprocessed_arima)
-checkresiduals(fits)
-forecast::checkresiduals(arima_results$data$.residuals)
+  tune::last_fit(split = split) %>% 
+  tune::collect_metrics()
 
 
 # J) COMPARISONS & CONCLUSIONS -------------------------------------------
