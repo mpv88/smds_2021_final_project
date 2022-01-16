@@ -11,6 +11,7 @@ library(MASS)
 library(modeltime)
 library(performance)
 library(PerformanceAnalytics)
+library(rms)
 library(splines)
 library(tibble)
 library(tidymodels)
@@ -320,8 +321,15 @@ veneto_alldata %>% dplyr::mutate(transf = (ICU)^(1/3)) %>%
 ## F.3) Numerical variables transformations ------------------------------------------
 veneto_alldata <- veneto_alldata %>% 
   dplyr::mutate(vaccinated_total = tidyr::replace_na(vaccinated_total, 0),
+                days = dplyr::row_number(),
                 delta_ICU = ICU - dplyr::lag(ICU, n = 1L, default = 0),
-                days = dplyr::row_number())
+                delta_hospitalized_total = hospitalized_total - dplyr::lag(hospitalized_total, n = 1L, default = 0),
+                delta_self_isolation = self_isolation - dplyr::lag(self_isolation, n = 1L, default = 0),
+                delta_positives_total = positives_total - dplyr::lag(positives_total, n = 1L, default = 0),
+                delta_total_cases = total_cases - dplyr::lag(total_cases, n = 1L, default = 0),
+                delta_swabs = swabs - dplyr::lag(swabs, n = 1L, default = 0),
+                delta_vaccinated_total = vaccinated_total - dplyr::lag(vaccinated_total, n = 1L, default = 0),
+                delta_deaths = deaths - dplyr::lag(deaths, n = 1L, default = 0))
 
 
 ## F.4) Set up a train/test split -----------------------------------------
@@ -361,13 +369,17 @@ preditors_to_exclude <- c("hospitalized_total", "self_isolation")
 preditors_to_include <- c("hospitalized_total", "self_isolation", "positives_total",
                           "total_cases", "swabs", "vaccinated_total")
 ## G.1) Recipes LM -------------------------------------------------------
-recipe_lm <- recipes::recipe(delta_ICU ~ days+hospitalized_total+self_isolation+swabs, data = split) %>%
+recipe_lm <- recipes::recipe(delta_ICU ~ ., data = split) %>%
              #recipes::step_mutate(days = row_number()) %>%   
              #recipes::step_select(ICU, days) %>%  #ERROR table predicts!!!
              #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
-             recipes::step_lag(swabs, hospitalized_total, self_isolation, lag = 1) %>% 
-             recipes::step_ns(days, deg_free = 3) #%>% 
-             #recipes::step_rm("deaths") %>%
+             #recipes::step_lag(delta_swabs, delta_positives_total, delta_hospitalized_total, lag = 15) %>% 
+             #recipes::step_lag(delta_swabs, delta_positives_total, delta_hospitalized_total, lag = 10) %>%
+             #recipes::step_lag(delta_swabs, lag = 5) %>%
+             recipes::step_ns(days, deg_free = 3) %>% 
+             recipes::step_rm(date, ICU, deaths, hospitalized_total, self_isolation,
+                              positives_total, total_cases, swabs, vaccinated_total,
+                              delta_deaths) %>% 
              #recipes::step_date(date) %>%
              #recipes::step_poly(days, degree = 3)
              #recipes::step_corr(all_numeric(), threshold = 0.80) %>%
@@ -375,7 +387,7 @@ recipe_lm <- recipes::recipe(delta_ICU ~ days+hospitalized_total+self_isolation+
              #recipes::step_scale(all_predictors()) %>%
              #recipes::step_ns(days, deg_free = tune::tune("days df")) %>%
              #recipes::step_dummy(all_nominal_predictors())
-             #recipes::step_interact(~ all_predictors():all_predictors())           
+             recipes::step_interact(~ all_predictors():all_predictors())           
              #recipes::step_normalize(all_numeric()) %>%
              #recipes::step_log(swabs, base = 10) %>%
              #recipes::step_naomit(all_predictors())
@@ -434,9 +446,50 @@ veneto_test_preprocessed_arima <- veneto_test_preprocessed_arima %>%
 
 
 # H) DATA MODELING ---------------------------------------------------------
-# we used tidymodels & caret for all modeling section
+# we used tidymodels for all modeling section
 
 cores <- parallel::detectCores() # get cores for parallelization
+
+stats::formula(veneto_train_preprocessed_lm %>% dplyr::relocate(delta_ICU))
+# perform automated variables/model selection
+lm.full <- stats::lm(delta_ICU ~ ., data = veneto_train_preprocessed_lm)
+lm.full <- stats::lm(delta_ICU ~ ., data = veneto_train_preprocessed_lm)
+ols.full <- ols(delta_ICU ~ ., data = veneto_train_preprocessed_lm)
+lm.null <- stats::lm(delta_ICU ~ 1, data = veneto_train_preprocessed_lm)
+
+## manual F-test backward selection on p-values
+stats::drop1(lm.full, test = "F")
+stats::drop1(update(lm.full, ~ . -residents -delta_deaths 
+                    -delta_hospitalized_total -delta_vaccinated_total -lag_5_delta_swabs
+                    -delta_total_cases -delta_swabs), test = "F")
+#...
+summary(update(lm.full, ~ . -residents -delta_deaths 
+               -delta_hospitalized_total -delta_vaccinated_total -lag_5_delta_swabs
+               -delta_total_cases -delta_swabs))
+
+## automated F-test-based backward selection on p-values
+ols.full %>% rms::fastbw(rule = "p", sls = 0.1)
+
+## automated F-test-based backward selection on AIC
+model.aic.backward <- stats::step(lm.full, direction = "backward", trace = 1)
+summary(model.aic.backward)
+
+## manual F-test-based forward selection on p-values
+stats::add1(lm.null, scope = ~ age + lwt + race.cat + smoke + preterm + ht + ui + ftv.cat,
+            test = "F")
+stats::add1(update(lm.null, ~ . +ui), scope = ~ age + lwt + race.cat + smoke + preterm + ht + ui + ftv.cat,
+            test = "F")
+#...
+summary(update(lm.null, ~ . +ui +race.cat +smoke +ht +lwt))
+
+## automated F-test-based forward selection on AIC
+model.aic.forward <- step(lm.null, direction = "forward", trace = 1, scope = ~ age + lwt + race.cat + smoke + preterm + ht + ui + ftv.cat)
+summary(model.aic.forward)
+
+## automated F-test-based forward-backward selection on AIC
+model.aic.both <- step(lm.null, direction = "both", trace = 1, scope = ~ age + lwt + race.cat + smoke + preterm + ht + ui + ftv.cat)
+summary(model.aic.both)
+
 
 ## H.1) Model 1: LM with log-transforms ------------------------------------
 lm_engine <- parsnip::linear_reg() %>% 
@@ -507,7 +560,7 @@ generics::glance(glm_pois_train_fit)
 fit2.1 <- stats::glm(ICU ~ . - residents, data = veneto_train_preprocessed_glm_pois,
                      family = stats::poisson(link = "log"))#, offset = log(residents))
 summary(fit2.1)
-fit2.2 <- stats::glm(ICU/residents ~ splines::ns(days, 3), data = veneto_train_preprocessed_glm_pois,
+fit2.2 <- stats::glm(ICU/residents ~ ., data = veneto_train_preprocessed_glm_pois,
                      family = stats::poisson(link = "log"), weights = residents)
 summary(fit2.2)
 anova2 <- anova(fit2.1, test = "Chisq") # check which predictors to keep
@@ -637,7 +690,7 @@ lm_test_res %>% plot_fitted()
 lm_test_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
 fit1 %>% forecast::forecast(newdata = veneto_test_preprocessed_lm %>%
                                       mutate(across(everything(), .fns = ~replace_na(.,0))), # na_omit
-                            level = c(95)) %>% plot() #see table with confidence bands
+                            level = c(95)) #see table with confidence bands
 
 # h) get metrics on test set   
 lm_test_res %>% pull_metrics() %>% print()
@@ -678,7 +731,7 @@ glm_pois_test_res <- glm_pois_train_fit %>% prediction_table(test_data, is_delta
 glm_pois_test_res %>% plot_fitted()
 glm_pois_test_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
 fit2.1 %>% forecast::forecast(newdata = veneto_test_preprocessed_glm_pois, 
-                              level = c(95)) #see table with confidence bands
+                              level = c(95)) #TODO: see table with confidence bands
 
 # h) get metrics on test set   
 glm_pois_test_res %>% pull_metrics() %>% print()
