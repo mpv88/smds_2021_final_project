@@ -37,9 +37,9 @@ Out-of-sample predictions (95% credible intervals->Bayes)
 Predictions for the future medical swabs have been generated through local polynomial regression (LOESS).
 ______________________________
 #TODO:
-seleziona predittori + evaluate best lags for 1 covariate https://rpubs.com/kaz_yos/stepwise
+fix FORWARD selection + seleziona predittori glm
 fix validation for LOOCV 
-Intercept of GLM in tidy?! if not possible use classical fit
+find offset for GLMs in tidy does exist?!
 ______________________________
 #MAIN_TAKEAWAYS:
 # use Ctrl+Alt+R to write ordered code in sections DONE

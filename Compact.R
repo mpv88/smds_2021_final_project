@@ -323,13 +323,13 @@ veneto_alldata <- veneto_alldata %>%
   dplyr::mutate(vaccinated_total = tidyr::replace_na(vaccinated_total, 0),
                 days = dplyr::row_number(),
                 delta_ICU = ICU - dplyr::lag(ICU, n = 1L, default = 0),
-                delta_hospitalized_total = hospitalized_total - dplyr::lag(hospitalized_total, n = 1L, default = 0),
-                delta_self_isolation = self_isolation - dplyr::lag(self_isolation, n = 1L, default = 0),
-                delta_positives_total = positives_total - dplyr::lag(positives_total, n = 1L, default = 0),
-                delta_total_cases = total_cases - dplyr::lag(total_cases, n = 1L, default = 0),
-                delta_swabs = swabs - dplyr::lag(swabs, n = 1L, default = 0),
-                delta_vaccinated_total = vaccinated_total - dplyr::lag(vaccinated_total, n = 1L, default = 0),
-                delta_deaths = deaths - dplyr::lag(deaths, n = 1L, default = 0))
+                d_hospitalized_total = hospitalized_total - dplyr::lag(hospitalized_total, n = 1L, default = 0),
+                d_self_isolation = self_isolation - dplyr::lag(self_isolation, n = 1L, default = 0),
+                d_positives_total = positives_total - dplyr::lag(positives_total, n = 1L, default = 0),
+                d_total_cases = total_cases - dplyr::lag(total_cases, n = 1L, default = 0),
+                d_swabs = swabs - dplyr::lag(swabs, n = 1L, default = 0),
+                d_vaccinated_total = vaccinated_total - dplyr::lag(vaccinated_total, n = 1L, default = 0),
+                d_deaths = deaths - dplyr::lag(deaths, n = 1L, default = 0))
 
 
 ## F.4) Set up a train/test split -----------------------------------------
@@ -375,11 +375,11 @@ recipe_lm <- recipes::recipe(delta_ICU ~ ., data = split) %>%
              #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
              #recipes::step_lag(delta_swabs, delta_positives_total, delta_hospitalized_total, lag = 15) %>% 
              #recipes::step_lag(delta_swabs, delta_positives_total, delta_hospitalized_total, lag = 10) %>%
-             #recipes::step_lag(delta_swabs, lag = 5) %>%
+             recipes::step_lag(d_swabs, lag = 1:5) %>%
              recipes::step_ns(days, deg_free = 3) %>% 
              recipes::step_rm(date, ICU, deaths, hospitalized_total, self_isolation,
                               positives_total, total_cases, swabs, vaccinated_total,
-                              delta_deaths) %>% 
+                              d_deaths) #%>% 
              #recipes::step_date(date) %>%
              #recipes::step_poly(days, degree = 3)
              #recipes::step_corr(all_numeric(), threshold = 0.80) %>%
@@ -387,7 +387,7 @@ recipe_lm <- recipes::recipe(delta_ICU ~ ., data = split) %>%
              #recipes::step_scale(all_predictors()) %>%
              #recipes::step_ns(days, deg_free = tune::tune("days df")) %>%
              #recipes::step_dummy(all_nominal_predictors())
-             recipes::step_interact(~ all_predictors():all_predictors())           
+          #recipes::step_interact(~ all_predictors():all_predictors())           
              #recipes::step_normalize(all_numeric()) %>%
              #recipes::step_log(swabs, base = 10) %>%
              #recipes::step_naomit(all_predictors())
@@ -450,44 +450,55 @@ veneto_test_preprocessed_arima <- veneto_test_preprocessed_arima %>%
 
 cores <- parallel::detectCores() # get cores for parallelization
 
-stats::formula(veneto_train_preprocessed_lm %>% dplyr::relocate(delta_ICU))
 # perform automated variables/model selection
-lm.full <- stats::lm(delta_ICU ~ ., data = veneto_train_preprocessed_lm)
 lm.full <- stats::lm(delta_ICU ~ ., data = veneto_train_preprocessed_lm)
 ols.full <- ols(delta_ICU ~ ., data = veneto_train_preprocessed_lm)
 lm.null <- stats::lm(delta_ICU ~ 1, data = veneto_train_preprocessed_lm)
 
-## manual F-test backward selection on p-values
-stats::drop1(lm.full, test = "F")
-stats::drop1(update(lm.full, ~ . -residents -delta_deaths 
-                    -delta_hospitalized_total -delta_vaccinated_total -lag_5_delta_swabs
-                    -delta_total_cases -delta_swabs), test = "F")
-#...
-summary(update(lm.full, ~ . -residents -delta_deaths 
-               -delta_hospitalized_total -delta_vaccinated_total -lag_5_delta_swabs
-               -delta_total_cases -delta_swabs))
+## manual F-test BACKWARD selection on p-values
+lm.full %>% stats::drop1(test = "F")
+lm.full %>% stats::update(~ . -residents -d_deaths -d_hospitalized_total -d_vaccinated_total 
+                          -lag_5_d_swabs -d_swabs -d_total_cases) %>% stats::drop1(test = "F")
+lm.full %>% stats::update(~ . -residents -d_deaths -d_hospitalized_total -d_vaccinated_total 
+                          -lag_5_d_swabs -d_swabs -d_total_cases) %>% summary()
 
-## automated F-test-based backward selection on p-values
+## automated F-test-based BACKWARD selection on p-values
 ols.full %>% rms::fastbw(rule = "p", sls = 0.1)
 
-## automated F-test-based backward selection on AIC
-model.aic.backward <- stats::step(lm.full, direction = "backward", trace = 1)
-summary(model.aic.backward)
+## automated F-test-based BACKWARD selection on AIC
+lm.full %>% stats::step(direction = "backward", trace = 1) %>% summary()
 
-## manual F-test-based forward selection on p-values
-stats::add1(lm.null, scope = ~ age + lwt + race.cat + smoke + preterm + ht + ui + ftv.cat,
-            test = "F")
-stats::add1(update(lm.null, ~ . +ui), scope = ~ age + lwt + race.cat + smoke + preterm + ht + ui + ftv.cat,
-            test = "F")
-#...
-summary(update(lm.null, ~ . +ui +race.cat +smoke +ht +lwt))
+## manual F-test-based FORWARD selection on p-values
+lm.null %>% stats::add1(scope = names(veneto_train_preprocessed_lm %>% 
+                                      dplyr::select(-delta_ICU)), test = "F")
+lm.null %>% stats::update(~ . + residents) %>% stats::add1(scope = names(veneto_train_preprocessed_lm %>%
+                                                                         dplyr::select(-delta_ICU)), test = "F")
+lm.null %>% stats::update(~ . + residents) %>% summary()
 
-## automated F-test-based forward selection on AIC
-model.aic.forward <- step(lm.null, direction = "forward", trace = 1, scope = ~ age + lwt + race.cat + smoke + preterm + ht + ui + ftv.cat)
+
+
+
+#FIXME:
+
+formula(paste("scope =",stats::formula(veneto_train_preprocessed_lm %>% 
+               dplyr::relocate(delta_ICU)) %>% formula.tools::rhs()))
+
+## automated F-test-based FORWARD selection on AIC
+lm.null %>% stats::step(direction = "forward", trace = 1, 
+                        scope = formula(paste(names(veneto_train_preprocessed_lm)
+                                             )))
+                        
+model.aic.forward <- stats::step(lm.null, direction = "forward", trace = 1,
+                          scope = stats::formula(veneto_train_preprocessed_lm %>% 
+                                                 dplyr::relocate(delta_ICU)) %>% 
+                                                 formula.tools::rhs())
 summary(model.aic.forward)
 
-## automated F-test-based forward-backward selection on AIC
-model.aic.both <- step(lm.null, direction = "both", trace = 1, scope = ~ age + lwt + race.cat + smoke + preterm + ht + ui + ftv.cat)
+## automated F-test-based FORWARD-BACKWARD selection on AIC
+model.aic.both <- stats::step(lm.null, direction = "both", trace = 1,
+                  scope = stats::formula(veneto_train_preprocessed_lm %>% 
+                                          dplyr::relocate(delta_ICU)) %>% 
+                                          formula.tools::rhs())
 summary(model.aic.both)
 
 
