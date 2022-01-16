@@ -29,12 +29,12 @@ prediction_table <- function(fitted_model, input_data, is_delta) {
               dplyr::mutate(actual = input_data$delta_ICU,
                             pred_real = pred, # use if we decide to transform Y (see F.1)
                             actual_real = actual)  # use if we decide to transform Y (see F.1)
-  } else {result <- fitted_model %>% 
-                    stats::predict(input_data) %>% # type = "response"
+  } else {result <- fitted_model %>%
+                    stats::predict(input_data, type = "raw") %>%
                     tibble::as_tibble_col(column_name = "pred") %>%
                     dplyr::mutate(actual = log(input_data$ICU),
-                                  pred_real = exp(pred), # use if we decide to transform Y (see F.1)
-                                  actual_real = exp(actual)) # use if we decide to transform Y (see F.1)
+                    pred_real = exp(pred), # use if we decide to transform Y (see F.1)
+                    actual_real = exp(actual)) # use if we decide to transform Y (see F.1)
   }
 }
 
@@ -264,7 +264,7 @@ veneto_alldata %>% # perform/visualize PCA on selected features to reduce dimens
   stats::na.omit() %>% DataExplorer::plot_prcomp(variance_cap = 0.9, nrow = 2L, ncol = 2L)
 
 
-# F) DATA PREPARATION (perform transform on all data) ----------------------
+# F) DATA PREPARATION (perform transforms on all data) ----------------------
 
 ## F.1) Checking transforms ------------------------------------------------
 # if we wish a normal response (ICUs) we may want to test which transform is best:
@@ -366,7 +366,7 @@ recipe_lm <- recipes::recipe(delta_ICU ~ days+hospitalized_total+self_isolation+
              #recipes::step_select(ICU, days) %>%  #ERROR table predicts!!!
              #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
              recipes::step_lag(swabs, hospitalized_total, self_isolation, lag = 1) %>% 
-             recipes::step_ns(days, deg_free = 3) %>% 
+             recipes::step_ns(days, deg_free = 3) #%>% 
              #recipes::step_rm("deaths") %>%
              #recipes::step_date(date) %>%
              #recipes::step_poly(days, degree = 3)
@@ -375,7 +375,7 @@ recipe_lm <- recipes::recipe(delta_ICU ~ days+hospitalized_total+self_isolation+
              #recipes::step_scale(all_predictors()) %>%
              #recipes::step_ns(days, deg_free = tune::tune("days df")) %>%
              #recipes::step_dummy(all_nominal_predictors())
-             recipes::step_interact(~ all_predictors():all_predictors())           
+             #recipes::step_interact(~ all_predictors():all_predictors())           
              #recipes::step_normalize(all_numeric()) %>%
              #recipes::step_log(swabs, base = 10) %>%
              #recipes::step_naomit(all_predictors())
@@ -383,27 +383,28 @@ recipe_lm <- recipes::recipe(delta_ICU ~ days+hospitalized_total+self_isolation+
 summary(recipe_lm)
 # apply recipe to train data & test data
 veneto_train_preprocessed_lm <- recipe_lm %>%
-  recipes::prep(train_data) %>% 
-  recipes::juice() %>% view()
+  recipes::prep() %>% 
+  recipes::bake(new_data = train_data) %>% view()
 
 veneto_test_preprocessed_lm <- recipe_lm %>%
-  recipes::prep(test_data) %>% 
-  recipes::juice() %>% view()
+  recipes::prep() %>% 
+  recipes::bake(new_data = test_data) %>% view()
 
 ## G.2) Recipes GLM -------------------------------------------------------
-recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, case_weight = residents, data = split) #%>%
+recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, data = split) %>% #?case weight
+                   recipes::update_role(residents, new_role = "excluded_predictors") %>%                   
                    #recipes::step_mutate(days = row_number()) %>%
-                   #recipes::step_ns(days, deg_free = 3)
+                   recipes::step_ns(days, deg_free = 3)
 
 summary(recipe_glm_pois)
 # apply recipe to train data & test data
 veneto_train_preprocessed_glm_pois <- recipe_glm_pois %>%
-  recipes::prep(train_data) %>% 
-  recipes::juice() %>% view()
+  recipes::prep() %>% 
+  recipes::bake(new_data = train_data) %>% view()
 
 veneto_test_preprocessed_glm_pois <- recipe_glm_pois %>%
-  recipes::prep(test_data) %>% 
-  recipes::juice() %>% view()
+  recipes::prep() %>% 
+  recipes::bake(new_data = test_data) %>% view()
                 
 ## G.3) Recipes ARIMA -------------------------------------------------------
 recipe_arima <- recipes::recipe(ICU ~ date, data = split) %>%
@@ -412,13 +413,13 @@ recipe_arima <- recipes::recipe(ICU ~ date, data = split) %>%
 summary(recipe_arima)
 # apply recipe to train data & test data
 veneto_train_preprocessed_arima <- recipe_arima %>%
-  recipes::prep(train_data) %>% 
-  recipes::juice() %>% view()
+  recipes::prep() %>% 
+  recipes::bake(new_data = train_data) %>% view()
 
 # apply recipe to train data & test data
 veneto_test_preprocessed_arima <- recipe_arima %>%
-  recipes::prep(test_data) %>% 
-  recipes::juice() %>% view()
+  recipes::prep() %>% 
+  recipes::bake(new_data = test_data) %>% view()
 
 # ts plot
 veneto_alldata %>% timetk::plot_time_series(date, ICU, .interactive = FALSE)
@@ -474,7 +475,7 @@ lm_results %>% summary()
 generics::glance(lm_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit1 <- stats::lm(delta_ICU ~ stats::poly(days, degree = 3), data = veneto_train_preprocessed_lm)
+fit1 <- stats::lm(delta_ICU ~ ., data = veneto_train_preprocessed_lm)
 fit1 <- stats::lm(delta_ICU ~ splines::bs(days, df = 3), data=veneto_train_preprocessed_lm)
 fit1 <- stats::lm(delta_ICU ~ lag_1_swabs+lag_1_hospitalized_total+lag_1_self_isolation, data=veneto_train_preprocessed_lm)
 summary(fit1) # check with tidy
@@ -503,24 +504,41 @@ glm_pois_results %>% summary()
 generics::glance(glm_pois_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit2.1 <- stats::glm(ICU ~ splines::ns(days, 3), data = veneto_train_preprocessed_glm_pois,
+fit2.1 <- stats::glm(ICU ~ . - residents, data = veneto_train_preprocessed_glm_pois,
                      family = stats::poisson(link = "log"))#, offset = log(residents))
 summary(fit2.1)
 fit2.2 <- stats::glm(ICU/residents ~ splines::ns(days, 3), data = veneto_train_preprocessed_glm_pois,
                      family = stats::poisson(link = "log"), weights = residents)
 summary(fit2.2)
-anova2 <- anova(fit2.1, test="Chisq") # check which predictors to keep
+anova2 <- anova(fit2.1, test = "Chisq") # check which predictors to keep
 # residual deviance[168.17] > df[120] signals over-dispersion!
 
 ## H.3) Model 3: GLM Quasi-Poisson with intercept + cubic spline on time ----
 
+glm_qpois_engine <- poissonreg::poisson_reg() %>% 
+  parsnip::set_engine("glm", family=stats::quasipoisson(link = "log")) %>% #, offset = log(residents)
+  parsnip::set_mode("regression")
 
+glm_qpois_workflow <- workflows::workflow() %>%
+  #workflows::remove_variables() %>% 
+  workflows::add_recipe(recipe_glm_pois) %>%
+  workflows::add_model(glm_qpois_engine)
+
+# fit just the best model 
+glm_qpois_train_fit <- fit(glm_qpois_workflow, train_data)
+
+# store results for evaluation
+glm_qpois_results <- glm_qpois_train_fit %>% hardhat::extract_fit_engine()
+
+# quick peek at results
+glm_qpois_results %>% summary()
+generics::glance(glm_qpois_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit3 <- stats::glm(ICU ~ ns(days, 3), data = veneto_train_preprocessed_glm_pois,
+fit3.1 <- stats::glm(ICU ~ ns(days, 3), data = veneto_train_preprocessed_glm_pois,
                    family = stats::quasipoisson(link = "log"), offset = log(residents))
 summary(fit3)
-an3 <- anova(fit3, test="F")
+an3 <- anova(fit3.1, test = "F")
 
 
 ## H.4) Model 4: auto-ARIMA (1,2,2) -----------------------------------------
@@ -633,10 +651,7 @@ lm_workflow %>%
 ## I.2) GLM Poisson --------------------------------------------------------
 
 # a) predict on train set
-glm_pois_train_res1 <- glm_pois_train_fit %>% prediction_table(train_data, is_delta = FALSE)
-glm_pois_train_res <- fit2.1 %>% prediction_table(train_data, is_delta = FALSE)
-glm_pois_train_fit %>% stats::predict(train_data)# type = "response"
-fit2.1 %>% stats::predict(train_data,  type = "response")
+glm_pois_train_res <- glm_pois_train_fit %>% prediction_table(train_data, is_delta = FALSE)
 
 # b) plot train results
 glm_pois_train_res %>% plot_fitted()
@@ -657,13 +672,13 @@ glm_pois_validation_res <- glm_pois_workflow %>%
 glm_pois_validation_res %>% tune::collect_metrics(summarize = TRUE)
 
 # f) predict on test set
-glm_pois_test_res1 <- glm_pois_train_fit %>% prediction_table(test_data, is_delta = FALSE)
-glm_pois_test_res <- fit2.1 %>% prediction_table(test_data, is_delta = FALSE)
+glm_pois_test_res <- glm_pois_train_fit %>% prediction_table(test_data, is_delta = FALSE)
 
 # g) plot test results (best practice is to keep transformed scale)
 glm_pois_test_res %>% plot_fitted()
 glm_pois_test_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
-fit2.1 %>% forecast::forecast(h = 14, level = c(95)) %>% plot() #see table with confidence bands
+fit2.1 %>% forecast::forecast(newdata = veneto_test_preprocessed_glm_pois, 
+                              level = c(95)) #see table with confidence bands
 
 # h) get metrics on test set   
 glm_pois_test_res %>% pull_metrics() %>% print()
@@ -713,7 +728,7 @@ arima_workflow %>%
   tune::collect_metrics()
 
 
-# J) COMPARISONS & CONCLUSIONS -------------------------------------------
+# __COMPARISONS & CONCLUSIONS__ -------------------------------------------
 rbind(base_train_rmse, base_test_rmse,
       tree_tidy_train_rmse, tree_tidy_test_rmse,
       tree_caret_train_rmse, tree_caret_test_rmse)
