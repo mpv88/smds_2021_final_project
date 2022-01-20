@@ -682,7 +682,7 @@ lm_results %>% vip::vip()
 lm_results %>% plot_residuals()
 
 # c) get metrics on train set
-lm_train_res %>% pull_metrics() %>% print()
+print_train_lm <- lm_train_res %>% pull_metrics() %>% print()
 
 # d) predict on validation set
 lm_validation_res <- lm_workflow %>%  
@@ -704,7 +704,7 @@ fit1 %>% forecast::forecast(newdata = veneto_test_preprocessed_lm %>%
                             level = c(95)) #see table with confidence bands
 
 # h) get metrics on test set   
-lm_test_res %>% pull_metrics() %>% print()
+print_test_lm <- lm_test_res %>% pull_metrics() %>% print()
 
 # h.bis) alternative test error check via workflow
 lm_workflow %>% 
@@ -724,7 +724,7 @@ glm_pois_results %>% vip::vip()
 glm_pois_results %>% plot_residuals()
 
 # c) get metrics on train set
-glm_pois_train_res %>% pull_metrics() %>% print()
+print_train_glm_pois <- glm_pois_train_res %>% pull_metrics() %>% print()
 
 # d) predict on validation set
 glm_pois_validation_res <- glm_pois_workflow %>%  
@@ -745,7 +745,7 @@ fit2.1 %>% forecast::forecast(newdata = veneto_test_preprocessed_glm_pois,
                               level = c(95)) #TODO: see table with confidence bands
 
 # h) get metrics on test set   
-glm_pois_test_res %>% pull_metrics() %>% print()
+print_test_glm_pois <- glm_pois_test_res %>% pull_metrics() %>% print()
 
 # h.bis) alternative test error check via workflow
 glm_pois_workflow %>% 
@@ -764,7 +764,7 @@ arima_train_res %>% plot_series()
 fit4 %>% forecast::checkresiduals() # also (arima_results$data$.residuals)
 
 # c) get metrics on train set
-arima_train_res %>% pull_metrics() %>% print()
+print_train_arima <- arima_train_res %>% pull_metrics() %>% print()
 
 # d) predict on validation set
 arima_validation_res <- arima_workflow %>%  
@@ -784,7 +784,7 @@ arima_test_res %>% plot_series()
 fit4 %>% forecast::forecast(h = 14, level = c(95)) %>% plot() #see table with confidence bands
 
 # h) get metrics on test set   
-arima_test_res %>% pull_metrics() %>% print()
+print_test_arima <- arima_test_res %>% pull_metrics() %>% print()
 
 # h.bis) alternative test error check via workflow
 arima_workflow %>% 
@@ -792,9 +792,11 @@ arima_workflow %>%
   tune::collect_metrics()
 
 
-# __COMPARISONS & CONCLUSIONS__ -------------------------------------------
-rbind(base_train_rmse, base_test_rmse,
-      tree_tidy_train_rmse, tree_tidy_test_rmse,
-      tree_caret_train_rmse, tree_caret_test_rmse)
+# __COMPARISONS & CONCLUSIONS__-------------------------------------------
+
+rbind(print_train_arima, print_test_arima,
+      print_train_glm_pois, print_test_glm_pois,
+      print_train_lm, print_test_lm)
+
 #lsf.str("package:dplyr") #to list all functions in package
 #environmentName(environment(select)) #to get package name from function

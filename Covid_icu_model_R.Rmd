@@ -1,0 +1,340 @@
+---
+title: "Covid-2"
+author: "renzo"
+date: "1/3/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+## Problem description
+The aim of this work is to create a model for predicting the number of patients in intensive care unit due to Covid-19 infection.
+The data are the official data provided by Italian Government officials.
+This study focuses on the region Veneto, for the period 01 October 2020 - 01 February 2021, basically the second wave.
+The out of sample prediction period is 15 days.
+
+# Data exploration
+```{r}
+# loading necessary packages
+library(tidyverse)
+library(ggplot2)
+library(bayesplot)
+library(lme4)
+library(arm)
+library(loo)
+
+# loading the data
+data_complete <- read.csv("https://raw.githubusercontent.com/pcm-dpc/
+COVID-19/master/dati-regioni/dpc-covid19-ita-regioni.csv")
+```
+
+```{r}
+summary(data_complete)
+#ncol(data_complete)
+# nrow(data_complete)
+
+## our region: Veneto
+data_complete_tb <- as.tibble(data_complete)
+Veneto <- filter(data_complete_tb, denominazione_regione=="Veneto")
+#nrow(Veneto)
+#ncol(Veneto)
+n_obs_tot <- length(Veneto$data)
+
+# recodification of the time variable
+times_all <- 1:n_obs_tot
+times_all <- as.factor(Veneto$data)
+levels(times_all) <- c(1:n_obs_tot)
+times_all <- as.numeric(times_all)
+
+# plot of the entire veneto data set
+ggplot(data=Veneto) + geom_point(aes(x=times_all, y=terapia_intensiva), color='red')
+
+## our data set: Veneto from 01-October to 01-February
+dates <- as.Date(Veneto$data)
+n_start <- which(dates=="2020-10-01")
+n_end <- which(dates=="2021-02-01")
+dates <- dates[n_start:n_end]
+
+data <- Veneto[(n_start):(n_end),]
+nrow(data)
+ncol(data)
+n_obs = length(data$data)
+
+# recodification of time for the working data set
+times <- 1:n_obs
+times <- as.factor(data$data)
+levels(times) <- c(1:n_obs)
+times <- as.numeric(times)
+
+# working data set - only covariates of interest for the analysis
+data_reduced <- subset(data, select = c(ricoverati_con_sintomi,totale_ospedalizzati,totale_positivi,nuovi_positivi,deceduti,tamponi,terapia_intensiva,isolamento_domiciliare,dimessi_guariti,totale_casi,casi_testati,ingressi_terapia_intensiva))
+
+data_reduced <- cbind(times,data_reduced)
+nrow(data_reduced)
+ncol(data_reduced)
+
+head(data_reduced)
+
+#plot of the ICU data together with some other varaibles, over time
+ggplot(data=data_reduced) + geom_point(aes(x=times, y=terapia_intensiva), color='red') + geom_point(aes(x=times, y=totale_positivi/1000), color='blue') + geom_point(aes(x=times, y=totale_ospedalizzati/10), color='orange') + xlab("time (days)") + ylab("number of cases") +  theme(axis.text.x = element_text(face = "bold", angle = 60, vjust = 0.5, size=8) )
+
+
+
+
+```
+
+## Model for Delta-ICU
+We consider a variable transformation, given by the daily difference of the ICU patients.
+This is justified by the fact that we expect more stability working with delta values compared with the original variable and because we expect to better able to analyze and assume some probability distribution for delta-ICU patients than for the number of patients.
+In fact, although the phenomenon is evolutionary and we are not given to observe it in its entirety, it is reasonable to assume that the complete phenomenon would have values centered around zero.
+
+In this regard, we analyze the first wave as well, to identify characteristics of the phenomenon that could help in modelling the second wave or support assumptions for the modelling of the second wave.
+
+```{r}
+# calculations of the Delta-ICU data
+delta_icu <- c()
+for (i in 1:(length(data$data)-1)) {
+  delta_icu[i] = data$terapia_intensiva[i+1] - data$terapia_intensiva[i]
+  }
+
+mean(delta_icu)
+sd(delta_icu)
+
+# first wave
+n_firstw <- 100
+Veneto_firstw <- Veneto[1:n_firstw,]
+times_firstw <- 1:n_firstw
+times_firstw <- as.factor(Veneto$data[1:n_firstw])
+levels(times_firstw) <- c(1:n_firstw)
+times_firstw <- as.numeric(times_firstw)
+
+delta_icu_firstw <- c()
+for (i in 1:(length(Veneto_firstw$data)-1)) {
+  delta_icu_firstw[i] = Veneto_firstw$terapia_intensiva[i+1] - Veneto_firstw$terapia_intensiva[i]
+  }
+
+mean(delta_icu_firstw)
+sd(delta_icu_firstw)
+
+# plots of first wave and data set delta-ICU
+par(mfrow=c(3,2))
+plot(times_firstw, Veneto_firstw$terapia_intensiva, pch=20, xlab="time - first wave", ylab="icu - first wave")
+plot(data_reduced$times, data_reduced$terapia_intensiva, pch=20, xlab="time - second wave", ylab="icu - second wave")
+
+hist(delta_icu_firstw, breaks=15)
+hist(delta_icu, breaks=15)
+
+plot(delta_icu_firstw, xlab="time - fist wave", ylab="delta-icu - first wave")
+abline(h=0, lty="dashed")
+
+plot(delta_icu, xlab="time - second wave", ylab="delta-icu - second wave")
+abline(h=0, lty="dashed")
+
+```
+The data for the first wave support the idea of an empirical mean of zero.
+The portion of the second wave we are working on shows a positive mean, which is expected because we are observing only a portion of the phenomenon, skewed towards the ascending part of the curve.
+The first wave shows an empirical standard deviation of ~10, while the partial data for the second wave shows a standard deviation of ~8. We expect the actual standard deviation of the second wave to be larger than the calculated value, because of teh undersampling of the descending phase.
+The data shows similarities between the first and the second wave.
+We check the quantile distribution versus the theoretical normal distribution.
+We could consider a reasonably good approximation for the range [-10,10], which is roughly an interval equal to 2*empirical standard deviation of the sample.
+
+```{r}
+# qqplots
+par(mfrow=c(1,2))
+qqnorm(delta_icu_firstw)
+qqline(delta_icu_firstw)
+abline(h=0, lty="dashed")
+abline(v=0, lty="dashed")
+
+qqnorm(delta_icu)
+qqline(delta_icu)
+abline(h=0, lty="dashed")
+abline(v=0, lty="dashed")
+```
+
+Delta-ICU seems to have a distribution that could be approximated by the normal distribution around the mean. 
+
+As we expected, the tails of the empirical distribution has fatter tails than the normal distribution, since there is a large instability around the peak of ICU curve, which generates more outliers than the normal distribution.
+
+Since we aim at out-of sample prediction over a quite long period of time, we focus on the trend of the data and not on the outliers. 
+We proceed as follows:
+  - we assume a normal distribution fo the delta-ICU variable
+  - we model the entire wave under stationary assumptions
+  - we check the predicted values for the entire wave against the normality distribution assumption (at least far form the tails)
+  
+We try to estimate the distribution of Delta-ICU using Bayesian inference.
+We use the Stan library and a biparametric model to estimate both the mean and the standard deviation
+
+```{r}
+library(rstan)
+library(rstanarm)
+
+setwd("D:/DSSC/00_I SEMESTER/Statistical Methods for Data Science/Project")
+
+n <- length(delta_icu_firstw)
+y <- delta_icu_firstw
+
+data_stan <- list(N=n, y=y, a=-20, b=20)
+fit_stan <- stan(file="biparametric.stan", data=data_stan, chains = 4, iter = 4000)
+sim <- extract(fit_stan)
+posterior_firstw_icu <- as.matrix(fit_stan)
+
+n1 <- length(delta_icu)
+y1 <- delta_icu
+
+data_stan1 <- list(N=n1, y=y1, a=-20, b=20)
+fit_stan1 <- stan(file="biparametric.stan", data=data_stan1, chains = 4, iter = 4000)
+sim1 <- extract(fit_stan1)
+posterior_icu <- as.matrix(fit_stan1)
+
+par(mfrow=c(1,2))
+plot_title_firstw_icu <- ggtitle("Posterior distributions - fisrt wave",
+                      "with medians and 80% intervals")
+mcmc_areas(posterior_firstw_icu, 
+           pars = c("theta","sigma"), 
+           prob = 0.8) + plot_title_firstw_icu
+plot_title_icu <- ggtitle("Posterior distributions - currnet data",
+                      "with medians and 80% intervals")
+mcmc_areas(posterior_icu, 
+           pars = c("theta","sigma"), 
+           prob = 0.8) + plot_title_icu
+
+```
+The posterior distribution for the first wave supports the assumption of a zero mean. The standard deviation value is centered around 10. We expect that after generating samples for the entire second wave we obtain similar results.
+
+We fit the data using a polynomial fit. We choose the order of the polynomial to be equal to 3 because it has exactly 3 roots and the data suggest a "wave" function within the interval of interest. 
+Although the behavior of the 3-rd order polynomial is not correct close to the extremes of the interval, our focus is on an interval far from the extremes, for which we assume that the 3-order polynomial approximation is reasaonble.
+Higher order polynomials are expected to provide no additional benefit but a higher risk of overfitting.
+
+The 3-rd order polynomial allows as well to model asymmetric behaviour of the descending phase of the curve.
+The latter could be controlled using the trend in the lagged number of swabs: although not all ICU patients are necessarily tested, or hospitalized first, we can assume the following model for the ICU patient:
+Total new cases --> Delta-hospitalized --> Delta-patients in ICU
+where the process develops with an average lag because of the biological phenomena involved.
+
+```{r}
+plot(data_reduced$times, data_reduced$nuovi_positivi, pch=20, xlab="time",ylab="nuovi positivi")
+par(new=TRUE)
+plot(data_reduced$times, data_reduced$terapia_intensiva, col="red", pch=20, axes=FALSE, xlab="",  ylab="")
+axis(side=4, at=pretty(range(data_reduced$terapia_intensiva)))
+mtext("terapia intensiva", side=4, line=3)
+```
+Although the lag between new cases and number of ICU patients might be different for the ascending phase and the descending phase, the charts show that the stationarity assumption for the extrapolation of the delta-icu is justified.
+In fact there is no change in the trend of the new cases. 
+The general phenomena is supported by the available data on the first wave.
+
+```{r}
+plot(times_firstw, Veneto_firstw$nuovi_positivi, pch=20, xlab="time - first wave",ylab="nuovi positivi")
+par(new=TRUE)
+plot(times_firstw, Veneto_firstw$terapia_intensiva, col="red", pch=20, axes=FALSE, xlab="",  ylab="")
+axis(side=4, at=pretty(range(Veneto_firstw$terapia_intensiva)))
+mtext("terapia intensiva", side=4, line=3)
+```
+
+Since the number of new cases appear to be quite symmetric distribution around its peak, we assume that the stationary delta_ICU curve could reasonably be assumed to be symmetric around its peak.
+
+Since the peak phase is quite unstable, we use moving average to estimate it. Using different average periods, we get a result of t~95 (where t=0 is the time at the beginning of the data set - 01 October 2020).
+So, we estimate the end of the stationary descending phase to be at t = 2*95 = 190.
+
+```{r}
+# estimate of the peak time
+
+d <- 13
+mov_av_delta_icu <- c()
+d_half <- (d-1)/2
+for(i in (1+d_half):(length(times)-d_half-1)){
+  mov_av_delta_icu[i] <- mean(delta_icu[(i-d_half):(i+d_half)])
+}
+plot(mov_av_delta_icu)
+abline(h=0, lty="dashed")
+abline(v=95, lty="dashed")
+abline(v=90, lty="dashed", col="blue")
+abline(v=100, lty="dashed", col="red")
+```
+
+We then fix a point:(t_rel=180, Delta-ICU=0) and compute 3-rd order polynomial interpolation for delta-ICU.
+
+```{r}
+t_end_wave = 95*2
+delta_t_wave = t_end_wave - length(times)
+delta_icu_extr <- c(delta_icu, 0)
+delta_icu_extr_df <- data.frame(delta_icu_extr)
+delta_icu_extr_df$index_extr <- c(1:length(delta_icu),length(delta_icu)+delta_t_wave)
+
+fit_poly3_extr <- lm(delta_icu_extr ~ poly(index_extr, 3, raw=TRUE), data=delta_icu_extr_df)
+ggplot(delta_icu_extr_df, aes(x=index_extr, y=delta_icu_extr)) + geom_point() + stat_smooth(method=lm, formula=y~poly(x,3,raw=TRUE))
+```
+
+Summary of 3-rd order polynomial fit and residual plot
+
+```{r}
+summary(fit_poly3_extr)
+plot(fitted(fit_poly3_extr), residuals(fit_poly3_extr))
+abline(h=0, lty="dashed")
+abline(v=0, lty="dashed")
+```
+
+The 3 coefficients are statically significant. The R-squared is low, at ~ 0.32, but we believe that without introducing an arbitrary smoothing function of the data around the peak, any model that does not overfit data in that portion will always have some important part of variability left unexplained.
+Since our aim is to produce an out-of-sample estimate, we focus on the trend of the data.
+
+The redisual plot appear to have some good characteristics such as random distribution. Of course, because of the nature of the problem, the negative quadrant is less represented.
+
+We now predict delta-ICU for the entire descending range, using a value of the intercept equal to zero since it was found to be not statistically significant (... NB: to be better supported: hypothesis testing ?...)
+
+```{r}
+
+times_extr <- seq(from=n_obs, to=n_obs+delta_t_wave,1) # delta-icu has on element less, so here we start from n_obs
+b_0 <- fit_poly3_extr$coefficients[1]
+b_1 <- fit_poly3_extr$coefficients[2]
+b_2 <- fit_poly3_extr$coefficients[3]
+b_3 <- fit_poly3_extr$coefficients[4]
+extr_icu <- c()
+for (i in 1:delta_t_wave) {
+    t <- n_obs+i-1
+    # extr_icu[i] <- b_0 + b_1*t + b_2*t^2 + b_3*t^3
+    extr_icu[i] <- b_1*t + b_2*t^2 + b_3*t^3
+}  
+times_pred <- c(times, times_extr[2:delta_t_wave])
+delta_icu_pred <- c(delta_icu, extr_icu)
+pred <- data.frame(times_pred,delta_icu_pred)
+
+ggplot(pred, aes(x=times_pred, y=delta_icu_pred)) + geom_point() + stat_smooth(method=lm, formula=y~poly(x,3,raw=TRUE))
+
+```
+
+We now check the predicted values of delta-icu against the normality assumption.
+As we can see, the simulated data are in good agreement (except the tails) with a normal distribution with mean equal to zero.
+
+```{r}
+fitted_delta_icu <- c()
+for (i in 1:length(pred$times_pred)) {
+    t <- i-1
+    fitted_delta_icu[i] <- b_1*t + b_2*t^2 + b_3*t^3
+}  
+
+qqnorm(fitted_delta_icu)
+qqline(fitted_delta_icu)
+abline(h=0, lty="dashed")
+abline(v=0, lty="dashed")
+```
+
+We finally proceed to run a Bayesian inference simulation on the entire set of fitted values to estimate the goodness of fit of the polynomial model with the empirical mean and standard deviation
+( does it make sense? )
+```{r}
+setwd("D:/DSSC/00_I SEMESTER/Statistical Methods for Data Science/Project")
+
+n_pred <- length(pred$times_pred)
+y_pred <- fitted_delta_icu
+
+data_stan_pred <- list(N=n_pred, y=y_pred, a=-20, b=20)
+fit_stan_pred <- stan(file="biparametric.stan", data=data_stan, chains = 4, iter = 4000)
+sim <- extract(fit_stan_pred)
+posterior_fitted_icu <- as.matrix(fit_stan_pred)
+
+plot_title_fitted_icu <- ggtitle("Posterior distributions - fitted icu",
+                      "with medians and 80% intervals")
+mcmc_areas(posterior_fitted_icu, 
+           pars = c("theta","sigma"), 
+           prob = 0.8) + plot_title_fitted_icu
+```

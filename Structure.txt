@@ -21,10 +21,10 @@ Period from [1st October 2020 to 1st February 2021] and prepare the following po
 target 27/01/2022 (124 training, 14 testing)
 ____________________________
 1)Introduction
-    a)Main aims
-    b)Methodology
-    c)Related works
-    d)Limitations of this work
+-Main aims
+-Methodology
+-Related works
+-Limitations of this work
 2)Data
 3)Model’s choice (n° of hospitalized people)->Poisson hierarchical regression (covariates: time, lockdown measures adopted by Government, number of medical swabs, regional membership)+%vaccinated people (0, 1, 2, 3 shots)
 4)Model estimates
