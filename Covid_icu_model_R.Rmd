@@ -1,6 +1,6 @@
 ---
 title: "Covid-2"
-author: "renzo"
+author: "Veneto's group"
 date: "1/3/2022"
 output: html_document
 ---

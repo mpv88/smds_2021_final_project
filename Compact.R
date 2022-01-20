@@ -304,14 +304,14 @@ veneto_alldata %>% dplyr::mutate(transf = (ICU)^(1/3)) %>%
 
 ## F.2) Categorical variables as factors ----------------------------------
 # categorical variables are converted to factors and ordered when needed
-# bike_all$season <- factor(bike_all$season,
+# veneto_alldata$season <- factor(veneto_alldata$season,
 #                           levels = c(1, 2, 3, 4),
 #                           labels = c("spring", "summer", "autumn", "winter"))
 # 
-# bike_all$workingday <- factor(bike_all$workingday,
+# veneto_alldata$workingday <- factor(veneto_alldata$workingday,
 #                               levels = c(0, 1), labels = c(FALSE, TRUE))
 # 
-# bike_all$weather <- factor(bike_all$weather,
+# veneto_alldata$weather <- factor(veneto_alldata$weather,
 #                            levels = c(1, 2, 3, 4),
 #                            labels = c("clear", "cloudy", "rainy", "heavy rain"),
 #                            ordered = TRUE)
