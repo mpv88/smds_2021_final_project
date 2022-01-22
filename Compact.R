@@ -403,11 +403,26 @@ veneto_test_preprocessed_lm <- recipe_lm %>%
   recipes::bake(new_data = test_data) %>% view()
 
 ## G.2) Recipes GLM -------------------------------------------------------
-recipe_glm_pois <- recipes::recipe(ICU ~ days + residents, data = split) %>% #?case weight
-                   recipes::update_role(residents, new_role = "excluded_predictors") %>%                   
-                   #recipes::step_mutate(days = row_number()) %>%
-                   recipes::step_ns(days, deg_free = 3)
-
+recipe_glm_pois <- recipes::recipe(ICU ~ ., data = split) %>% #?case weight
+                   recipes::step_log(swabs, self_isolation, base = exp(1)) %>%
+                   recipes::step_lag(hospitalized_total, self_isolation,
+                    positives_total, total_cases, swabs, vaccinated_total, lag = 1) %>%
+                   recipes::update_role(residents, new_role = "excluded_predictors") %>% 
+                   recipes::step_rm(date, hospitalized_total, self_isolation,
+                    positives_total, deaths, total_cases, swabs, vaccinated_total,
+                    delta_ICU, d_deaths, d_hospitalized_total, d_self_isolation,
+                    d_positives_total, d_total_cases, d_swabs, d_vaccinated_total,
+                    d_deaths, lag_1_vaccinated_total, lag_1_positives_total,
+                    lag_1_total_cases, lag_1_hospitalized_total) %>%
+                   recipes::step_center(all_predictors()) %>%
+                   recipes::step_scale(all_predictors()) %>%
+                   recipes::step_ns(days, deg_free = 3) %>% 
+                   recipes::step_interact(~ all_predictors():all_predictors()) %>% 
+                   recipes::step_rm(days_ns_1_x_days_ns_2, 
+                   days_ns_1_x_days_ns_3, days_ns_2_x_days_ns_3,
+                   lag_1_self_isolation_x_lag_1_swabs, lag_1_self_isolation_x_days_ns_1,
+                   lag_1_self_isolation_x_days_ns_2, lag_1_self_isolation_x_days_ns_3)
+                  
 summary(recipe_glm_pois)
 # apply recipe to train data & test data
 veneto_train_preprocessed_glm_pois <- recipe_glm_pois %>%
@@ -568,9 +583,10 @@ glm_pois_results %>% summary()
 generics::glance(glm_pois_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit2.1 <- stats::glm(ICU ~ . - residents, data = veneto_train_preprocessed_glm_pois,
-                     family = stats::poisson(link = "log"))#, offset = log(residents))
+fit2.1 <- stats::glm(ICU ~ . -residents, data = veneto_train_preprocessed_glm_pois,
+                     family = stats::poisson(link = "log"), offset = log(residents))
 summary(fit2.1)
+generics::glance(fit2.1)
 fit2.2 <- stats::glm(ICU/residents ~ ., data = veneto_train_preprocessed_glm_pois,
                      family = stats::poisson(link = "log"), weights = residents)
 summary(fit2.2)
@@ -599,9 +615,10 @@ glm_qpois_results %>% summary()
 generics::glance(glm_qpois_train_fit)
 
 # check if results are in line with tidymodels: OK!
-fit3.1 <- stats::glm(ICU ~ ns(days, 3), data = veneto_train_preprocessed_glm_pois,
-                   family = stats::quasipoisson(link = "log"), offset = log(residents))
-summary(fit3)
+fit3.1 <- stats::glm(ICU ~ . -residents, data = veneto_train_preprocessed_glm_pois,
+                     family = stats::quasipoisson(link = "log"), offset = log(residents))
+summary(fit3.1)
+generics::glance(fit3.1)
 an3 <- anova(fit3.1, test = "F")
 
 
@@ -635,15 +652,15 @@ veneto_train_preprocessed_arima %>% diff() %>% stats::decompose() %>% plot()
 veneto_train_preprocessed_arima %>% diff() %>% stats::acf() # auto correlation to get q
 veneto_train_preprocessed_arima %>% diff() %>% stats::pacf() # partial auto correlation to get p
 veneto_train_preprocessed_arima %>% diff() %>% stats::Box.test(lag = 10, type = "Ljung-Box") # daily change is random, uncorrelated with previous days
-#veneto_train_preprocessed_arima %>% diff() %>% tseries::adf.test(alternative="stationary", k=0)
+veneto_train_preprocessed_arima %>% diff() %>% tseries::adf.test(alternative="stationary", k=0)
 
 best_lag <-  VARselect(diff(veneto_train_preprocessed_arima), lag.max = 10)
 n <- best_lag$selection[1] # best AR lag is 8 
 #auto-regressive distributed lag (ADL) 
 
 arima_engine2 <- modeltime::arima_reg(seasonal_period = "auto", # periodic nature of seasonality, default = "auto" 
-                                      non_seasonal_ar = 0, # p-order of NSAR terms
-                                      non_seasonal_differences = 2, # d-order of NS differencing 
+                                      non_seasonal_ar = 9, # p-order of NSAR terms
+                                      non_seasonal_differences = 1, # d-order of NS differencing 
                                       non_seasonal_ma = 1, # q-order of NSMA terms
                                       seasonal_ar = 0, # P-order of SAR terms
                                       seasonal_differences = 0, # D-order of S differencing 
@@ -716,6 +733,7 @@ lm_workflow %>%
 
 # a) predict on train set
 glm_pois_train_res <- glm_pois_train_fit %>% prediction_table(train_data, is_delta = FALSE)
+glm_pois_train_res <- fit3.1 %>% prediction_table(veneto_train_preprocessed_glm_pois, is_delta = FALSE) #change raw with link in function
 
 # b) plot train results
 glm_pois_train_res %>% plot_fitted()
@@ -737,6 +755,7 @@ glm_pois_validation_res %>% tune::collect_metrics(summarize = TRUE)
 
 # f) predict on test set
 glm_pois_test_res <- glm_pois_train_fit %>% prediction_table(test_data, is_delta = FALSE)
+glm_pois_test_res <- fit3.1 %>% prediction_table(veneto_test_preprocessed_glm_pois, is_delta = FALSE) #change raw with link in function
 
 # g) plot test results (best practice is to keep transformed scale)
 glm_pois_test_res %>% plot_fitted()
@@ -757,6 +776,7 @@ glm_pois_workflow %>%
 
 # a) predict on train set
 arima_train_res <- arima_train_fit %>% calibration_table(train_data)
+arima_train_res <- arima_train_fit2 %>% calibration_table(train_data)
 
 # b) plot train results
 arima_train_res %>% plot_fitted()
@@ -777,6 +797,7 @@ arima_validation_res %>% tune::collect_metrics(summarize = TRUE)
 
 # f) predict on test set
 arima_test_res <- arima_train_fit %>% calibration_table(test_data)
+arima_test_res <- arima_train_fit2 %>% calibration_table(test_data)
 
 # g) plot test results (best practice is to keep transformed scale)
 arima_test_res %>% plot_fitted()

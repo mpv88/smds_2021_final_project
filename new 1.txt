@@ -1,0 +1,58 @@
+5 domande (2 lunghe e 3 corte):
+-quale è un problema tipico non conviene stemming in text mining
+-knn costruire confidence intervals
+-in RF posso usare B maggiore di m/n?
+-posso usare categoriche con SVM
+-come affronterebbe problema text mining temi elementari
+fomulare bene le cose
+15 minuti
+
+GLM CON self isolation
+      transf_metrics real_metrics
+rmse      0.06085200    6.3875273
+rsq       0.99568242    0.9971944
+mae       0.03608738    4.9539616
+mape      0.92424422    3.6700100
+mase      0.88785491    0.7952412
+smape     0.91697838    3.6030629
+      transf_metrics real_metrics
+rmse      0.04439905    7.1520603
+rsq       0.97014046    0.9694730
+mae       0.03630278    5.4829380
+mape      0.72987654    3.6908956
+mase      0.86141407    0.9399322
+smape     0.72773902    3.6291841
+GLM SENZA SELF ISOLATION
+      transf_metrics real_metrics
+rmse      0.06184366    6.6256524
+rsq       0.99552529    0.9969813
+mae       0.03820269    5.1994438
+mape      0.96986247    3.8674652
+mase      0.93989781    0.8346476
+smape     0.96443905    3.8147674
+      transf_metrics real_metrics
+rmse      0.10294547   12.0471348
+rsq       0.97189505    0.9698643
+mae       0.08384864   10.3666398
+mape      1.72749156    7.9160923
+mase      1.98961067    1.7771383
+smape     1.74950524    8.3716176
+
+
+ARIMA BEST LAG
+      transf_metrics real_metrics
+rmse       6.5346263    6.5346263
+rsq        0.9972270    0.9972270
+mae        4.5931986    4.5931986
+mape       3.0960010    3.0960010
+mase       0.7414218    0.7414218
+smape      3.1536187    3.1536187
+      transf_metrics real_metrics
+rmse      11.4096671   11.4096671
+rsq        0.9760683    0.9760683
+mae       10.3777784   10.3777784
+mape       7.0759222    7.0759222
+mase       1.5507025    1.5507025
+smape      6.7922472    6.7922472
+
+AUTO ARIMA
