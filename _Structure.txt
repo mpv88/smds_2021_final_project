@@ -53,8 +53,8 @@ ______________________________
 # estimate validation error DONE
 # evaluate Mean squared error (MSE), Root mean squared error (RMSE), Mean absolute error (MAE) on OOS for all models DONE
 ______________________________
-Ideas call 04/01/2021
-- differenziare ICU
-- esponenziale con portante negativa-> si può fare in R?
-- residui lm (poly^3)-> a bit of heteroskedasticity?...a reason to add predictors or to change modeling approach
-- problema del cutting temporale (modificare il periodo di fitting)
+slide 4 o 5: tenere 1 sola
+slide 15 cosa vogliamo fare?
+slide 16: poly of what? of time?
+slide 37: scritta fuori margini
+slide 39: cambiare ascisse+vedete se ho scritto cavolate

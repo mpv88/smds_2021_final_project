@@ -31,7 +31,7 @@ prediction_table <- function(fitted_model, input_data, is_delta) {
                             pred_real = pred, # use if we decide to transform Y (see F.1)
                             actual_real = actual)  # use if we decide to transform Y (see F.1)
   } else {result <- fitted_model %>%
-                    stats::predict(input_data, type = "raw") %>%
+                    stats::predict(input_data, type = "raw") %>% #"raw"
                     tibble::as_tibble_col(column_name = "pred") %>%
                     dplyr::mutate(actual = log(input_data$ICU),
                     pred_real = exp(pred), # use if we decide to transform Y (see F.1)
@@ -75,7 +75,7 @@ get_model <- function(x) {
 
 # 5.Plot fitted model estimates vs. real-world data
 plot_fitted <- function(prediction_table) {
-  ggplot2::ggplot(prediction_table, ggplot2::aes(x = actual, y = pred)) + 
+  ggplot2::ggplot(prediction_table, ggplot2::aes(x = actual_real, y = pred_real)) + 
   ggplot2::geom_abline(lty = 2) + 
   ggplot2::geom_point(alpha = 0.5) +
   ggplot2::labs(x = "Official ICUs registered", y = "Predicted ICUs") +
@@ -373,24 +373,35 @@ recipe_lm <- recipes::recipe(delta_ICU ~ ., data = split) %>%
              #recipes::step_mutate(days = row_number()) %>%   
              #recipes::step_select(ICU, days) %>%  #ERROR table predicts!!!
              #recipes::update_role(all_of(preditors_to_exclude), new_role = "excluded_predictors") %>%  
-             #recipes::step_lag(delta_swabs, delta_positives_total, delta_hospitalized_total, lag = 15) %>% 
-             #recipes::step_lag(delta_swabs, delta_positives_total, delta_hospitalized_total, lag = 10) %>%
-             recipes::step_lag(d_swabs, lag = 1:5) %>%
-             recipes::step_ns(days, deg_free = 3) %>% 
-             recipes::step_rm(date, ICU, deaths, hospitalized_total, self_isolation,
-                              positives_total, total_cases, swabs, vaccinated_total,
-                              d_deaths) #%>% 
+             #recipes::step_log(d_swabs, base = exp(1) %>%           
+             #recipes::step_ns(days, deg_free = 3) %>%            
+             recipes::step_lag(d_swabs, lag = 5:10) %>%
+             recipes::step_lag(d_self_isolation, lag = 6:7) %>%
+             recipes::step_lag(d_hospitalized_total, lag = 2) %>%
+             recipes::step_lag(d_positives_total, d_total_cases, d_vaccinated_total, lag = 1) %>%
+             recipes::step_rm(date, ICU, hospitalized_total, self_isolation,
+                   residents, positives_total, deaths, total_cases, swabs, vaccinated_total,
+                   d_hospitalized_total, d_self_isolation,
+                   d_positives_total, d_deaths, d_total_cases, d_swabs, d_vaccinated_total,
+                   ) %>% 
              #recipes::step_date(date) %>%
-             #recipes::step_poly(days, degree = 3)
-             #recipes::step_corr(all_numeric(), threshold = 0.80) %>%
-             #recipes::step_center(all_predictors()) %>%
-             #recipes::step_scale(all_predictors()) %>%
+             recipes::step_poly(days, degree = 3) %>% 
+             recipes::step_corr(all_numeric(), threshold = 0.80) %>%
+             recipes::step_center(all_predictors()) %>%
+             recipes::step_scale(all_predictors()) %>%
              #recipes::step_ns(days, deg_free = tune::tune("days df")) %>%
              #recipes::step_dummy(all_nominal_predictors())
-          #recipes::step_interact(~ all_predictors():all_predictors())           
-             #recipes::step_normalize(all_numeric()) %>%
-             #recipes::step_log(swabs, base = 10) %>%
+             recipes::step_interact(~ all_predictors():all_predictors()) %>%        
+             recipes::step_normalize(all_predictors())
              #recipes::step_naomit(all_predictors())
+
+recipe_lm2 <- recipes::recipe(delta_ICU ~ ., data = split) %>%
+              #recipes::step_lag(d_delta, lag = 2) %>%
+              recipes::step_rm(date, ICU, deaths, hospitalized_total, self_isolation,
+                                positives_total, total_cases, swabs, vaccinated_total,
+                                d_deaths, residents, d_hospitalized_total, d_self_isolation, 
+                                d_positives_total, d_total_cases, d_swabs, d_vaccinated_total) %>% 
+              recipes::step_poly(days, degree = 3)
 
 summary(recipe_lm)
 # apply recipe to train data & test data
@@ -472,8 +483,7 @@ lm.null <- stats::lm(delta_ICU ~ 1, data = veneto_train_preprocessed_lm)
 
 ## manual F-test BACKWARD selection on p-values
 lm.full %>% stats::drop1(test = "F")
-lm.full %>% stats::update(~ . -residents -d_deaths -d_hospitalized_total -d_vaccinated_total 
-                          -lag_5_d_swabs -d_swabs -d_total_cases) %>% stats::drop1(test = "F")
+lm.full %>% stats::update(~ . -lag_3_d_swabs) %>% stats::drop1(test = "F")
 lm.full %>% stats::update(~ . -residents -d_deaths -d_hospitalized_total -d_vaccinated_total 
                           -lag_5_d_swabs -d_swabs -d_total_cases) %>% summary()
 
@@ -554,10 +564,14 @@ lm_results %>% summary()
 generics::glance(lm_train_fit)
 
 # check if results are in line with tidymodels: OK!
+fit1 <- lm.full %>% stats::step(direction = "backward", trace = 1)
 fit1 <- stats::lm(delta_ICU ~ ., data = veneto_train_preprocessed_lm)
 fit1 <- stats::lm(delta_ICU ~ splines::bs(days, df = 3), data=veneto_train_preprocessed_lm)
 fit1 <- stats::lm(delta_ICU ~ lag_1_swabs+lag_1_hospitalized_total+lag_1_self_isolation, data=veneto_train_preprocessed_lm)
 summary(fit1) # check with tidy
+generics::glance(fit1)
+graphics::par(mfrow = c(2,2))
+fit1 %>% plot(pch = 16, col = "#006EA1")
 stats::extractAIC(fit1) # starting AIC + check tidy
 stepAIC(fit1, list(upper = ~ lag_1_swabs+lag_1_hospitalized_total+lag_1_self_isolation, lower = ~ 1), direction = "backward")
 
@@ -648,23 +662,24 @@ summary(fit4)
 
 ## H.5) Model 5: ARIMA with best lag and cross correlation best lags -------
 # discover best lag for Y variable
+veneto_train_preprocessed_arima %>% diff(lag = 2, differences = 2) %>% stats::decompose() %>% plot()
 veneto_train_preprocessed_arima %>% diff() %>% stats::decompose() %>% plot()
-veneto_train_preprocessed_arima %>% diff() %>% stats::acf() # auto correlation to get q
-veneto_train_preprocessed_arima %>% diff() %>% stats::pacf() # partial auto correlation to get p
-veneto_train_preprocessed_arima %>% diff() %>% stats::Box.test(lag = 10, type = "Ljung-Box") # daily change is random, uncorrelated with previous days
-veneto_train_preprocessed_arima %>% diff() %>% tseries::adf.test(alternative="stationary", k=0)
+veneto_train_preprocessed_arima %>% diff(lag = 2, differences = 2) %>% stats::acf() # auto correlation to get q
+veneto_train_preprocessed_arima %>% diff(lag = 2, differences = 2) %>% stats::pacf() # partial auto correlation to get p
+veneto_train_preprocessed_arima %>% diff(lag = 2, differences = 2) %>% stats::Box.test(lag = 10, type = "Ljung-Box") # rejects daily change is random, uncorrelated with previous days
+veneto_train_preprocessed_arima %>% diff(lag = 2, differences = 2) %>% tseries::adf.test(alternative="stationary", k=0)
+veneto_train_preprocessed_arima %>% diff(lag = 2, differences = 2) %>% tseries::kpss.test() #KPSS test: accept null hp means that series is stationary, and small p-value suggest that the series is NOT Stationary and a differencing is required
 
-best_lag <-  VARselect(diff(veneto_train_preprocessed_arima), lag.max = 10)
-n <- best_lag$selection[1] # best AR lag is 8 
+veneto_train_preprocessed_arima %>% diff(lag = 2, differences = 2) %>% VARselect(lag.max = 10) # best AR lag is 6
 #auto-regressive distributed lag (ADL) 
 
 arima_engine2 <- modeltime::arima_reg(seasonal_period = "auto", # periodic nature of seasonality, default = "auto" 
-                                      non_seasonal_ar = 9, # p-order of NSAR terms
-                                      non_seasonal_differences = 1, # d-order of NS differencing 
-                                      non_seasonal_ma = 1, # q-order of NSMA terms
+                                      non_seasonal_ar = 6, # p-order of NSAR terms
+                                      non_seasonal_differences = 2, # d-order of NS differencing 
+                                      non_seasonal_ma = 2, # q-order of NSMA terms
                                       seasonal_ar = 0, # P-order of SAR terms
                                       seasonal_differences = 0, # D-order of S differencing 
-                                      seasonal_ma = 1) %>% # Q-order of SMA terms
+                                      seasonal_ma = 0) %>% # Q-order of SMA terms
                  parsnip::set_engine("arima") %>%
                  parsnip::set_mode("regression")
 
@@ -683,6 +698,7 @@ arima_results2 <- arima_train_fit2 %>%
 # quick peek at results
 arima_results2
 
+fit5 <- veneto_train_preprocessed_arima %>% forecast::Arima(order=c(6,2,2))
 
 # I) DATA PREDICTION & EVALUATION ---------------------------------------
 # here we valuate predictions for each model to choose the best
@@ -691,6 +707,7 @@ arima_results2
 
 # a) predict on train set
 lm_train_res <- lm_train_fit %>% prediction_table(train_data, is_delta = TRUE)
+lm_train_res <- fit1 %>% prediction_table(veneto_train_preprocessed_lm, is_delta = TRUE)
 
 # b) plot train results
 plot_fitted(lm_train_res)
@@ -712,16 +729,20 @@ lm_validation_res %>% tune::collect_metrics(summarize = TRUE)
 
 # f) predict on test set
 lm_test_res <- lm_train_fit %>% prediction_table(test_data, is_delta = TRUE)
+lm_test_res <- read.csv("poly.csv") 
 
 # g) plot test results (best practice is to keep transformed scale)
 lm_test_res %>% plot_fitted()
 lm_test_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
+lm_test_res %>% plot_residuals()
 fit1 %>% forecast::forecast(newdata = veneto_test_preprocessed_lm %>%
                                       mutate(across(everything(), .fns = ~replace_na(.,0))), # na_omit
                             level = c(95)) #see table with confidence bands
 
+
 # h) get metrics on test set   
 print_test_lm <- lm_test_res %>% pull_metrics() %>% print()
+print_test_lm2 <- lm_test_res2 %>% pull_metrics() %>% print()
 
 # h.bis) alternative test error check via workflow
 lm_workflow %>% 
@@ -732,7 +753,7 @@ lm_workflow %>%
 ## I.2) GLM Poisson --------------------------------------------------------
 
 # a) predict on train set
-glm_pois_train_res <- glm_pois_train_fit %>% prediction_table(train_data, is_delta = FALSE)
+glm_pois_train_res <- glm_qpois_train_fit %>% prediction_table(train_data, is_delta = FALSE)
 glm_pois_train_res <- fit3.1 %>% prediction_table(veneto_train_preprocessed_glm_pois, is_delta = FALSE) #change raw with link in function
 
 # b) plot train results
@@ -754,14 +775,17 @@ glm_pois_validation_res <- glm_pois_workflow %>%
 glm_pois_validation_res %>% tune::collect_metrics(summarize = TRUE)
 
 # f) predict on test set
-glm_pois_test_res <- glm_pois_train_fit %>% prediction_table(test_data, is_delta = FALSE)
+glm_pois_test_res <- glm_qpois_train_fit %>% prediction_table(test_data, is_delta = FALSE)
 glm_pois_test_res <- fit3.1 %>% prediction_table(veneto_test_preprocessed_glm_pois, is_delta = FALSE) #change raw with link in function
 
 # g) plot test results (best practice is to keep transformed scale)
 glm_pois_test_res %>% plot_fitted()
 glm_pois_test_res %>% dplyr::mutate(date = row_number()) %>% plot_series()
-fit2.1 %>% forecast::forecast(newdata = veneto_test_preprocessed_glm_pois, 
-                              level = c(95)) #TODO: see table with confidence bands
+fit3.1 %>% forecast::forecast(newdata = veneto_test_preprocessed_glm_pois, 
+                              level = c(80, 90, 95)) #TODO: see table with confidence bands
+
+fit3.1 %>% predict(newdata = veneto_test_preprocessed_glm_pois,
+                   se.fit=TRUE,  type="link", interval = "confidence")
 
 # h) get metrics on test set   
 print_test_glm_pois <- glm_pois_test_res %>% pull_metrics() %>% print()
@@ -781,7 +805,7 @@ arima_train_res <- arima_train_fit2 %>% calibration_table(train_data)
 # b) plot train results
 arima_train_res %>% plot_fitted()
 arima_train_res %>% plot_series()
-fit4 %>% forecast::checkresiduals() # also (arima_results$data$.residuals)
+fit5 %>% forecast::checkresiduals() # also (arima_results$data$.residuals)
 
 # c) get metrics on train set
 print_train_arima <- arima_train_res %>% pull_metrics() %>% print()
@@ -802,7 +826,7 @@ arima_test_res <- arima_train_fit2 %>% calibration_table(test_data)
 # g) plot test results (best practice is to keep transformed scale)
 arima_test_res %>% plot_fitted()
 arima_test_res %>% plot_series()
-fit4 %>% forecast::forecast(h = 14, level = c(95)) %>% plot() #see table with confidence bands
+pred_table <- fit5 %>% forecast::forecast(h = 14, level = c(80, 90, 95)) %>% plot() #see table with confidence bands
 
 # h) get metrics on test set   
 print_test_arima <- arima_test_res %>% pull_metrics() %>% print()
