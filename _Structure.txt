@@ -17,44 +17,21 @@ Period from [1st October 2020 to 1st February 2021] and prepare the following po
 5)Check the model fit by using the proper tools, such as residuals plots.
 6)Provide 10-15 days-forward predictions and check their accuracy (say, for the period February 2nd to February 15, 2021).
 7)Compare alternative models in terms of predictive information criteria and comment.
-
 target 27/01/2022 (124 training, 14 testing)
-____________________________
-1)Introduction
--Main aims
--Methodology
--Related works
--Limitations of this work
-2)Data
-3)Model’s choice (n° of hospitalized people)->Poisson hierarchical regression (covariates: time, lockdown measures adopted by Government, number of medical swabs, regional membership)+%vaccinated people (0, 1, 2, 3 shots)
-4)Model estimates
-5)Graphical analysis and predictions
-6)Models for intensive care units (ICU)->Poisson hierarchical regression
-7)Predictive tables for ICU and hospitalized
-
-Model comparison via leave-one-out cross-validation.
-Out-of-sample predictions (95% credible intervals->Bayes)
-Predictions for the future medical swabs have been generated through local polynomial regression (LOESS).
 ______________________________
 #TODO:
-fix FORWARD selection + seleziona predittori glm
 fix validation for LOOCV 
-find offset for GLMs in tidy does exist?!
+find offset for GLMs in tidy does exist?
 ______________________________
 #MAIN_TAKEAWAYS:
 # use Ctrl+Alt+R to write ordered code in sections DONE
 # use stopifnot on each function beginning NOT TODO
 # use models <- purrr::map(by_country$data, country_lm) to apply model multiple time at once NOT TODO 
 # use "DataExplorer" for quick EDA (and then create ad-hoc graphs for more detailed features) DONE
-# use pipes for all data wrangling DOING
+# use pipes for all data wrangling DONE
 # use "caret" for all model LM, GLM, GAM, Bayes (#TOSELF: learn tidymodels) DOING
 # perform stepwise selection on LM (broom::glance(mod1) to evaluate different models) TODO
-# use ANOVA with CHI/F test to evaluate nested models TODO
+# use ANOVA with CHI/F test to evaluate nested models DONE
 # estimate validation error DONE
 # evaluate Mean squared error (MSE), Root mean squared error (RMSE), Mean absolute error (MAE) on OOS for all models DONE
 ______________________________
-slide 4 o 5: tenere 1 sola
-slide 15 cosa vogliamo fare?
-slide 16: poly of what? of time?
-slide 37: scritta fuori margini
-slide 39: cambiare ascisse+vedete se ho scritto cavolate

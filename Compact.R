@@ -200,7 +200,7 @@ veneto_alldata %>%
 # 2.Observing Y distribution
 # plot response variable vs time
 ggplot(veneto_alldata, aes(x = date, y=ICU))+
-  geom_point(aes(x=date, y = ICU))+
+  geom_point(aes(x=date, y = self_isolation))+
   labs(title="ICUs time evolution",
        x="time (days)", y = "intensive care units (ICUs)")
 
